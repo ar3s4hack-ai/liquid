@@ -1,1 +1,224 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Liquidation Heatmap BTC</title>
+<style>
+html,body{margin:0;height:100%;background:#0b0e14;color:#cfd6e4;font-family:system-ui,-apple-system,sans-serif;overflow:hidden}
+#bar{position:absolute;top:0;left:0;right:0;z-index:5;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top))}
+button{background:#1a2030;color:#cfd6e4;border:1px solid #2b3550;border-radius:6px;padding:6px 10px;font-size:14px}
+button.on{background:#2D6CDF;border-color:#2D6CDF;color:#fff}
+button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
+#st{margin-left:auto;font-size:11px;text-align:right;line-height:1.3}
+#wrap{position:absolute;left:0;right:0;bottom:0;top:90px}
+#heat,#chart{position:absolute;inset:0;width:100%;height:100%}
+#heat{z-index:1;pointer-events:none}
+#chart{z-index:2}
+#zones{position:absolute;left:8px;bottom:8px;z-index:6;background:rgba(11,14,20,.82);border:1px solid #2b3550;border-radius:8px;padding:6px 8px;font-size:12px;line-height:1.5;max-width:75%}
+.L{color:#ff9f1c}.S{color:#2ec4ff}.src-cg{color:#FFD60A}.src-es{color:#7fb0ff}.err{color:#ef5350}
+</style>
+</head>
+<body>
+<div id="bar">
+  <button data-tf="5m">5m</button>
+  <button data-tf="15m" class="on">15m</button>
+  <button data-tf="1h">1h</button>
+  <button data-tf="4h">4h</button>
+  <button id="bMode" class="tg">Calor</button>
+  <button id="bAsia" class="tg on">Asia</button>
+  <button id="bZones" class="tg on">Zonas</button>
+  <div id="st">cargando…</div>
+</div>
+<div id="wrap"><canvas id="heat"></canvas><div id="chart"></div><div id="zones"></div></div>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const K = new URLSearchParams(location.search).get('k');
+const TFS = { '5m': 300, '15m': 900, '1h': 3600, '4h': 14400 };
+const bar = document.getElementById('bar');
+const wrap = document.getElementById('wrap');
+const cv = document.getElementById('heat');
+const ctx = cv.getContext('2d');
+const st = document.getElementById('st');
+const zonesEl = document.getElementById('zones');
+const bMode = document.getElementById('bMode');
+const bAsia = document.getElementById('bAsia');
+const bZones = document.getElementById('bZones');
+let tf = '15m', data = null, first = true, sideMode = false, showAsia = true, showZones = true;
+let lines = [], lastSig = '', version = 0;
 
+const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+  autoSize: true,
+  layout: { background: { type: 'solid', color: 'rgba(0,0,0,0)' }, textColor: '#cfd6e4' },
+  grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
+  timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#2b3550' },
+  rightPriceScale: { borderColor: '#2b3550' }
+});
+const series = chart.addCandlestickSeries({
+  upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+  wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+});
+
+function layout() { wrap.style.top = bar.offsetHeight + 'px'; }
+
+function ramp(r) {
+  const a = [123, 44, 191], b = [45, 108, 223], c = [255, 214, 10];
+  let f, t, k;
+  if (r < 0.5) { f = a; t = b; k = r / 0.5; } else { f = b; t = c; k = (r - 0.5) / 0.5; }
+  return f.map((v, i) => Math.round(v + (t[i] - v) * k));
+}
+
+function fillFor(ratio, longShare) {
+  const alpha = (0.15 + 0.6 * ratio).toFixed(2);
+  if (sideMode) {
+    return longShare >= 0.5 ? `rgba(255,159,28,${alpha})` : `rgba(46,196,255,${alpha})`;
+  }
+  const [r, g, b] = ramp(ratio);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function signature() {
+  const ts = chart.timeScale();
+  const cs = data.candles;
+  return [wrap.clientWidth, wrap.clientHeight,
+    series.priceToCoordinate(data.price), series.priceToCoordinate(data.price * 1.01),
+    ts.timeToCoordinate(cs[0].time), ts.timeToCoordinate(cs[cs.length - 1].time),
+    ts.options().barSpacing, sideMode, version].join('|');
+}
+
+function drawTime(w) {
+  const ts = chart.timeScale();
+  const bs = ts.options().barSpacing;
+  const lastT = data.candles[data.candles.length - 1].time;
+  const half = data.heat.size / 2;
+  const max = data.heat.max;
+  if (!(max > 0)) return;
+  for (const [p, t0, t1, L, S] of data.heat.segments) {
+    const ratio = Math.min(1, (L + S) / max);
+    if (ratio < 0.05) continue;
+    const y1 = series.priceToCoordinate(p + half);
+    const y2 = series.priceToCoordinate(p - half);
+    let x1 = ts.timeToCoordinate(t0);
+    let x2 = t1 >= lastT ? wrap.clientWidth : ts.timeToCoordinate(t1);
+    if (y1 === null || y2 === null || x1 === null || x2 === null) continue;
+    x1 -= bs / 2;
+    if (t1 < lastT) x2 += bs / 2;
+    if (x2 < 0 || x1 > wrap.clientWidth) continue;
+    const xs = Math.max(0, x1);
+    ctx.fillStyle = fillFor(ratio, L / (L + S));
+    ctx.fillRect(xs, y1, x2 - xs, Math.max(1, y2 - y1));
+  }
+}
+
+function drawStatic(w) {
+  const half = data.heat.size / 2;
+  const max = data.heat.max;
+  if (!(max > 0)) return;
+  for (const b of data.heat.bins) {
+    const ratio = b.value / max;
+    if (ratio < 0.06) continue;
+    const y1 = series.priceToCoordinate(b.price + half);
+    const y2 = series.priceToCoordinate(b.price - half);
+    if (y1 === null || y2 === null) continue;
+    ctx.fillStyle = fillFor(ratio, b.price < data.price ? 1 : 0);
+    ctx.fillRect(0, y1, w, Math.max(1, y2 - y1));
+  }
+}
+
+function render() {
+  requestAnimationFrame(render);
+  if (!data) return;
+  const s = signature();
+  if (s === lastSig) return;
+  lastSig = s;
+  const dpr = window.devicePixelRatio || 1;
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (data.heat.mode === 'time') drawTime(w); else drawStatic(w);
+}
+
+function fmt(x) { return Math.round(x).toLocaleString('es-ES'); }
+
+function updateZones() {
+  zonesEl.style.display = showZones && data && data.zones.length ? 'block' : 'none';
+  if (!data) return;
+  const rows = data.zones.slice(0, 5).map(z => {
+    const d = z.price - data.price;
+    const dots = z.ratio > 0.75 ? '●●●' : z.ratio > 0.45 ? '●●' : '●';
+    const cls = z.side === 'long' ? 'L' : 'S';
+    const lado = z.side === 'long' ? 'largos' : 'cortos';
+    return `<div class="${cls}">${fmt(z.price)} · ${d >= 0 ? '+' : '−'}${fmt(Math.abs(d))} pts · ${lado} ${dots}</div>`;
+  });
+  zonesEl.innerHTML = rows.join('');
+}
+
+function updateAsia() {
+  lines.forEach(l => series.removePriceLine(l));
+  lines = [];
+  series.setMarkers([]);
+  if (!showAsia || !data.asia) return;
+  const a = data.asia;
+  lines.push(series.createPriceLine({ price: a.high, color: '#e6e6e6', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Asia máx' }));
+  lines.push(series.createPriceLine({ price: a.low, color: '#e6e6e6', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Asia mín' }));
+  if (a.sweep) {
+    const t = a.sweep.time - (a.sweep.time % TFS[tf]);
+    const high = a.sweep.side === 'high';
+    series.setMarkers([{
+      time: t, position: high ? 'aboveBar' : 'belowBar', color: '#e6e6e6',
+      shape: high ? 'arrowDown' : 'arrowUp', text: 'barrido'
+    }]);
+  }
+}
+
+function updateStatus() {
+  const cls = data.source === 'coinglass' ? 'src-cg' : 'src-es';
+  const hora = new Date(data.updated * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  st.innerHTML = `<span class="${cls}">${data.source}</span> (${data.used.join('+')}) · ${hora}<br>${fmt(data.price)}` +
+    (data.note ? `<br><span class="err">${String(data.note).slice(0, 70)}</span>` : '');
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/data?tf=' + tf + (K ? '&k=' + encodeURIComponent(K) : ''));
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    data = d;
+    series.setData(d.candles);
+    if (first) { chart.timeScale().fitContent(); first = false; }
+    version++;
+    updateAsia(); updateZones(); updateStatus();
+  } catch (e) {
+    st.innerHTML = `<span class="err">Error: ${String(e.message).slice(0, 80)}</span>`;
+  }
+}
+
+document.querySelectorAll('button[data-tf]').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('button[data-tf]').forEach(x => x.classList.remove('on'));
+    btn.classList.add('on');
+    tf = btn.dataset.tf; first = true; data = null; lastSig = '';
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    load();
+  };
+});
+bMode.onclick = () => {
+  sideMode = !sideMode;
+  bMode.textContent = sideMode ? 'Lado' : 'Calor';
+  bMode.classList.toggle('on', sideMode);
+  version++;
+};
+bAsia.onclick = () => { showAsia = !showAsia; bAsia.classList.toggle('on', showAsia); if (data) updateAsia(); };
+bZones.onclick = () => { showZones = !showZones; bZones.classList.toggle('on', showZones); updateZones(); };
+
+window.addEventListener('resize', layout);
+layout();
+requestAnimationFrame(render);
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
