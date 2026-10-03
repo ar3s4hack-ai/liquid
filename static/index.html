@@ -16,6 +16,12 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 #heat,#chart{position:absolute;inset:0;width:100%;height:100%}
 #heat{z-index:1;pointer-events:none}
 #chart{z-index:2}
+#fx{position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none}
+#val{position:absolute;right:8px;top:6px;z-index:8;background:rgba(11,14,20,.97);border:1px solid #2b3550;border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.45;display:none;width:300px;max-height:80%;overflow-y:auto}
+#val h4{margin:8px 0 4px;font-size:12px;color:#aab3c5;font-weight:600}
+#val .big{font-size:15px;font-weight:700}
+#val .ok{color:#26a69a}#val .warn{color:#FFD60A}#val .bad{color:#ef5350}
+#val .muted{color:#7f8aa3;font-size:11px}
 #hdr{position:absolute;left:8px;top:6px;z-index:6;font-size:11px;color:#aab3c5;pointer-events:none;text-shadow:0 0 3px #000}
 #zones{position:absolute;left:8px;bottom:36px;z-index:6;background:rgba(11,14,20,.85);border:1px solid #2b3550;border-radius:8px;padding:6px 8px;font-size:12px;line-height:1.5;max-width:75%}
 #cfg{position:absolute;right:8px;top:6px;z-index:8;background:rgba(11,14,20,.96);border:1px solid #2b3550;border-radius:10px;padding:10px;font-size:13px;display:none;width:250px}
@@ -37,11 +43,14 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
   <button id="bAsia" class="tg on">Asia</button>
   <button id="bZones" class="tg on">Zonas</button>
   <button id="bProf" class="tg on">Perfil</button>
+  <button id="bLiq" class="tg on">Liq</button>
+  <button id="bVal">✓ Validez</button>
   <button id="bCfg">⚙</button>
   <div id="st">cargando…</div>
 </div>
 <div id="wrap">
-  <canvas id="heat"></canvas><div id="chart"></div>
+  <canvas id="heat"></canvas><div id="chart"></div><canvas id="fx"></canvas>
+  <div id="val"></div>
   <div id="hdr"></div><div id="zones"></div>
   <div id="cfg">
     <div class="row"><div class="lbl">Modelo</div><div id="cModel"></div></div>
@@ -78,11 +87,16 @@ const bAsia = document.getElementById('bAsia');
 const bZones = document.getElementById('bZones');
 const bProf = document.getElementById('bProf');
 const bCfg = document.getElementById('bCfg');
+const bLiq = document.getElementById('bLiq');
+const bVal = document.getElementById('bVal');
+const valEl = document.getElementById('val');
+const fx = document.getElementById('fx');
+const fctx = fx.getContext('2d');
 let tf = '5m', data = null, first = true, sideMode = false, showAsia = true, showZones = true, showProf = true;
 let lines = [], lastSig = '', version = 0;
 // Precio real recibido desde Binance (WebSocket)
 let livePrice = null, previousLivePrice = null, ws = null, wsRetry = null, priceLine = null, lastLiveUi = 0;
-let wsLive = false, liveBar = null;
+let wsLive = false, liveBar = null, showLiq = true, valTimer = null;
 
 const chart = LightweightCharts.createChart(document.getElementById('chart'), {
   autoSize: true,
@@ -131,7 +145,7 @@ function signature() {
   return [wrap.clientWidth, wrap.clientHeight,
     series.priceToCoordinate(data.price), series.priceToCoordinate(data.price * 1.01),
     ts.timeToCoordinate(cs[0].time), ts.timeToCoordinate(cs[cs.length - 1].time),
-    ts.options().barSpacing, sideMode, showProf, cfg.palette, cfg.minPct, version].join('|');
+    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.palette, cfg.minPct, version].join('|');
 }
 
 function drawTime(w) {
@@ -210,6 +224,27 @@ function drawProfile(w) {
   }
 }
 
+function drawLiqs(w, h) {
+  if (!showLiq || !data.liqs || !data.liqs.items || !data.liqs.items.length) return;
+  const ts = chart.timeScale();
+  let mx = 0;
+  for (const it of data.liqs.items) mx = Math.max(mx, it[3]);
+  if (!(mx > 0)) return;
+  for (const [t, p, side, usd] of data.liqs.items) {
+    const x = ts.timeToCoordinate(t);
+    const y = series.priceToCoordinate(p);
+    if (x === null || y === null || x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
+    const r = 2.5 + Math.sqrt(usd / mx) * 13;
+    fctx.beginPath();
+    fctx.arc(x, y, r, 0, Math.PI * 2);
+    fctx.fillStyle = side === 1 ? 'rgba(255,159,28,0.55)' : 'rgba(46,196,255,0.55)';
+    fctx.fill();
+    fctx.lineWidth = 1;
+    fctx.strokeStyle = side === 1 ? '#ff9f1c' : '#2ec4ff';
+    fctx.stroke();
+  }
+}
+
 function render() {
   requestAnimationFrame(render);
   if (!data) return;
@@ -225,6 +260,10 @@ function render() {
   ctx.clearRect(0, 0, w, h);
   if (data.heat.mode === 'time') drawTime(w); else drawStatic(w);
   drawProfile(w);
+  if (fx.width !== cv.width || fx.height !== cv.height) { fx.width = cv.width; fx.height = cv.height; }
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fctx.clearRect(0, 0, w, h);
+  drawLiqs(w, h);
 }
 
 function fmt(x) { return Math.round(x).toLocaleString('es-ES'); }
@@ -351,6 +390,7 @@ async function load() {
     }
     version++;
     updateAsia(); updateZones(); updateStatus(); updateHeader(); buildCfg();
+    if (valEl.style.display === 'block' && first === false && valEl.dataset.tf !== tf) { valEl.dataset.tf = tf; loadVal(); }
     // reconectar el WebSocket si se cayó o cambió el símbolo
     if (!ws || ws.readyState > 1) connectBinance();   // solo si está cerrado o cerrándose
   } catch (e) {
@@ -387,7 +427,80 @@ document.getElementById('cMin').oninput = (e) => {
   cfg.minPct = +e.target.value; saveCfg(); version++;
   document.getElementById('cMinV').textContent = cfg.minPct; updateHeader();
 };
-bCfg.onclick = () => { cfgEl.style.display = cfgEl.style.display === 'block' ? 'none' : 'block'; };
+bCfg.onclick = () => {
+  const open = cfgEl.style.display !== 'block';
+  cfgEl.style.display = open ? 'block' : 'none';
+  if (open) closeVal();
+};
+
+// ───── validez: comparación con liquidaciones reales
+const MODEL_LABEL = { oi: 'Open Interest', vol: 'Volumen' };
+function pct(x) { return x === null || x === undefined ? '–' : Math.round(x * 100) + '%'; }
+function times(x) { return x === null || x === undefined ? '–' : x.toFixed(1).replace('.', ',') + '×'; }
+function verdict(lift) {
+  if (lift === null || lift === undefined) return '<span class="muted">sin datos</span>';
+  if (lift >= 1.5) return `<span class="ok">✓ ${times(lift)} mejor que el azar</span>`;
+  if (lift >= 1.1) return `<span class="warn">≈ algo mejor que el azar (${times(lift)})</span>`;
+  return `<span class="bad">✗ no mejora al azar (${times(lift)})</span>`;
+}
+function renderVal(v) {
+  const parts = [`<div class="big">¿Acierta el heatmap? · ${v.tf}</div>`];
+  const ms = Object.entries(v.models || {});
+  const anyM = ms.length ? ms[0][1] : null;
+  if (!anyM || !anyM.enough) {
+    const n = anyM ? anyM.events : 0, h = anyM ? anyM.coverage_hours : 0;
+    parts.push(`<div class="warn">Aún no hay datos suficientes para concluir.</div>
+      <div class="muted">Hacen falta 100 liquidaciones y 24 h escuchando dentro del gráfico. Ahora: ${n} liquidaciones y ${String(h).replace('.', ',')} h. Los números de abajo son orientativos.</div>`);
+  }
+  let best = null;
+  for (const [m, r] of ms) {
+    if (r.lift !== null && (best === null || r.lift > best[1])) best = [m, r.lift];
+    parts.push(`<h4>Modelo ${MODEL_LABEL[m] || m}</h4>
+      <div>Acierto: <b>${pct(r.hit)}</b> <span class="muted">(azar: ${pct(r.base)})</span><br>${verdict(r.lift)}</div>
+      <div>Zonas fuertes tocadas con liquidación real: <b>${pct(r.prec)}</b> <span class="muted">(azar: ${pct(r.prec_base)})</span> · ${verdict(r.prec_lift)}</div>
+      <div class="muted">${r.events} liquidaciones · ${fmtM(r.usd || 0)} USD · ${r.touches} zonas tocadas · margen ±${r.tol_points} pts</div>`);
+  }
+  if (best && anyM && anyM.enough) parts.push(`<div style="margin-top:6px">Ahora acierta más: <b>${MODEL_LABEL[best[0]]}</b></div>`);
+  const c = (data && data.ctx) || {};
+  const lq = (data && data.liqs) || {};
+  parts.push(`<h4>Contexto del mercado</h4>
+    <div>Funding: <b>${c.funding !== undefined ? (c.funding * 100).toFixed(4) + '%' : '–'}</b> <span class="muted">(positivo: pagan los largos)</span></div>
+    <div>Largos/cortos (cuentas): <b>${c.ls_accounts ? c.ls_accounts.toFixed(2) : '–'}</b>${c.long_pct ? ` <span class="muted">(${Math.round(c.long_pct * 100)}% en largo)</span>` : ''}</div>
+    <div>Largos/cortos (top traders): <b>${c.ls_top ? c.ls_top.toFixed(2) : '–'}</b></div>
+    <div>Liquidado 24 h: <span class="L">largos ${fmtM(lq.long_24h || 0)}</span> · <span class="S">cortos ${fmtM(lq.short_24h || 0)}</span></div>`);
+  const col = v.collectors || {};
+  const dot = (x) => x && x.connected ? '<span class="ok">●</span>' : '<span class="bad">●</span>';
+  parts.push(`<h4>Recogida de liquidaciones reales</h4>
+    <div>${['binance', 'bybit', 'okx'].map(ex => `${dot(col[ex])} ${ex[0].toUpperCase() + ex.slice(1)}`).join(' · ')}</div>
+    <div class="muted">Guardadas: ${(v.db && v.db.events) || 0} · escuchando ${String((v.db && v.db.hours_listening) || 0).replace('.', ',')} h en total</div>
+    <h4>Cómo leerlo</h4>
+    <div class="muted">Acierto: % del dinero liquidado que cayó en una zona que el heatmap ya marcaba antes. Azar: lo que se acertaría con un precio cualquiera cercano. Burbuja <span class="L">naranja</span> = largos liquidados, <span class="S">cian</span> = cortos. Binance solo envía una muestra (1 por segundo).</div>`);
+  valEl.innerHTML = parts.join('');
+}
+async function loadVal() {
+  valEl.innerHTML = '<div class="muted">Calculando con las liquidaciones reales…</div>';
+  try {
+    const r = await fetch(`/api/validate?tf=${tf}&lev=${cfg.levs.join(',')}` + (K ? '&k=' + encodeURIComponent(K) : ''), { cache: 'no-store' });
+    const v = await r.json();
+    if (v.error) throw new Error(v.error);
+    renderVal(v);
+  } catch (e) {
+    valEl.innerHTML = `<div class="bad">Error: ${String(e.message).slice(0, 100)}</div>`;
+  }
+}
+function closeVal() {
+  valEl.style.display = 'none';
+  if (valTimer) { clearInterval(valTimer); valTimer = null; }
+}
+bVal.onclick = () => {
+  if (valEl.style.display === 'block') { closeVal(); return; }
+  cfgEl.style.display = 'none';
+  valEl.style.display = 'block';
+  valEl.dataset.tf = tf;
+  loadVal();
+  valTimer = setInterval(loadVal, 300000);
+};
+bLiq.onclick = () => { showLiq = !showLiq; bLiq.classList.toggle('on', showLiq); };
 
 document.querySelectorAll('button[data-tf]').forEach(btn => {
   btn.onclick = () => {

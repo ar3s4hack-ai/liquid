@@ -28,3 +28,21 @@ BIN_PCT             grosor de cada línea del heatmap en % del precio (0.02 ≈ 
 /health          responde ok
 /api/price       precio actual de Binance (respaldo del precio en directo)
 /api/test-alert  envía un mensaje de prueba a Telegram
+
+## Liquidaciones reales y validación (v4)
+La web escucha 24 h las liquidaciones reales de BTCUSDT en Binance (solo una muestra: 1 por segundo), Bybit y OKX,
+las guarda en SQLite y las dibuja como burbujas (naranja = largos liquidados, cian = cortos).
+El botón «✓ Validez» compara las zonas del heatmap (las que había ANTES de cada liquidación) con lo que pasó de verdad
+y con el azar. Hacen falta 100 liquidaciones y 24 h escuchando para que el resultado cuente.
+
+IMPORTANTE: en Railway crea un Volume montado en /data y pon la variable DATA_DIR=/data.
+Sin él, los datos guardados se borran en cada despliegue.
+
+DATA_DIR            carpeta de la base de datos (./data por defecto; en Railway: /data con un Volume)
+LIQ_MIN_USD         tamaño mínimo de burbuja en USD (5000)
+LIQ_RETENTION_DAYS  días que se guardan las liquidaciones (30)
+COLLECT             1 recoge liquidaciones, 0 no (1)
+VAL_TTL             segundos de caché de la validación (300)
+
+/api/validate    resultado de la validación (tf, lev)
+/api/status      estado de los recolectores y de la base de datos

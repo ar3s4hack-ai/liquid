@@ -1,10 +1,13 @@
 import math
+from collections import defaultdict
 import os
 import threading
 import time
 
 import requests
 from flask import Flask, jsonify, request, send_from_directory
+
+import liqdata as LQ
 
 app = Flask(__name__, static_folder="static")
 
@@ -74,6 +77,7 @@ def fetch_candles(tf, limit=None):
             "low": float(r[3]),
             "close": float(r[4]),
             "v": float(r[7]),
+            "tb": float(r[10]) if len(r) > 10 else None,
         }
         for r in rows
     ]
@@ -204,7 +208,19 @@ def tiers_from(levs):
     return [(l, TIER_W[l] / tot) for l in sel]
 
 
-def estimate_heat(candles, sources, price, tiers, model="oi"):
+def buy_share(c):
+    """Parte del volumen que fue compra agresiva (0 a 1). Sin dato: color de la vela."""
+    v, tb = c.get("v") or 0, c.get("tb")
+    if v > 0 and tb is not None:
+        return min(1.0, max(0.0, tb / v))
+    if c["close"] > c["open"]:
+        return 1.0
+    if c["close"] < c["open"]:
+        return 0.0
+    return 0.5
+
+
+def estimate_heat(candles, sources, price, tiers, model="oi", out=None):
     size = price * BIN_PCT / 100
     lo, hi = price * (1 - RANGE_PCT / 100), price * (1 + RANGE_PCT / 100)
     recs = []
@@ -213,6 +229,7 @@ def estimate_heat(candles, sources, price, tiers, model="oi"):
     opened = {}
     segs = []
     prev = {}
+    touches = defaultdict(float)
 
     def settle(i, touched):
         for b in touched:
@@ -249,25 +266,22 @@ def estimate_heat(candles, sources, price, tiers, model="oi"):
                 vals[b][0 if side == 1 else 1] -= vol
                 tv[b][ti] -= vol
                 touched.add(b)
+                touches[(b, i, side)] += vol
             else:
                 kept.append(r)
         recs = kept
         if model == "vol":
-            v = c.get("v") or 0
-            if v > 0:
-                for lev, w in tiers:
-                    add(c["close"] * (1 - 1 / lev + MMR), v * w * 0.5, 1, lev, touched)
-                    add(c["close"] * (1 + 1 / lev - MMR), v * w * 0.5, -1, lev, touched)
+            amount = c.get("v") or 0
         else:
             d = oi_delta(sources, prev, c["time"])
-            if d is not None and d > 0 and c["close"] != c["open"]:
-                side = 1 if c["close"] > c["open"] else -1
-                for lev, w in tiers:
-                    if side == 1:
-                        p = c["close"] * (1 - 1 / lev + MMR)
-                    else:
-                        p = c["close"] * (1 + 1 / lev - MMR)
-                    add(p, d * w, side, lev, touched)
+            amount = d if d is not None and d > 0 else 0
+        if amount > 0:
+            s_buy = buy_share(c)
+            for lev, w in tiers:
+                if s_buy > 0:
+                    add(c["close"] * (1 - 1 / lev + MMR), amount * w * s_buy, 1, lev, touched)
+                if s_buy < 1:
+                    add(c["close"] * (1 + 1 / lev - MMR), amount * w * (1 - s_buy), -1, lev, touched)
         settle(i, touched)
 
     active = []
@@ -286,6 +300,8 @@ def estimate_heat(candles, sources, price, tiers, model="oi"):
         "segments": segs,
         "active": [[p, round(L), round(S), t] for p, L, S, t in sorted(active)],
     }
+    if out is not None:
+        out["touches"] = dict(touches)
     return heat, zones
 
 
@@ -351,6 +367,34 @@ def asia_info(c15):
 
 
 # ───────────── Construcción de la respuesta ─────────────
+_ctx_cache = {"t": 0, "v": {}}
+
+
+def market_context():
+    now = time.time()
+    if now - _ctx_cache["t"] < 60:
+        return _ctx_cache["v"]
+    ctx = {}
+    if LQ.MARK["price"] and now * 1000 - LQ.MARK["ts"] < 120000:
+        ctx["funding"], ctx["next_funding"] = LQ.MARK["funding"], LQ.MARK["next_funding"]
+    else:
+        try:
+            r = get_json(f"{FAPI}/fapi/v1/premiumIndex", {"symbol": SYMBOL})
+            ctx["funding"], ctx["next_funding"] = float(r["lastFundingRate"]), int(r["nextFundingTime"])
+        except Exception:
+            pass
+    for key, path in (("ls_accounts", "globalLongShortAccountRatio"), ("ls_top", "topLongShortPositionRatio")):
+        try:
+            r = get_json(f"{FAPI}/futures/data/{path}", {"symbol": SYMBOL, "period": "5m", "limit": 1})
+            ctx[key] = float(r[-1]["longShortRatio"])
+            if key == "ls_accounts":
+                ctx["long_pct"] = float(r[-1]["longAccount"])
+        except Exception:
+            pass
+    _ctx_cache.update(t=now, v=ctx)
+    return ctx
+
+
 def build(tf, model, levs):
     candles = fetch_candles(tf)
     price = candles[-1]["close"]
@@ -402,7 +446,17 @@ def build(tf, model, levs):
         "heat": heat,
         "zones": zones,
         "asia": asia,
+        "liqs": safe_chart_liqs(candles, TF_SECONDS[tf]),
+        "ctx": market_context(),
+        "collectors": LQ.status(),
     }
+
+
+def safe_chart_liqs(candles, step):
+    try:
+        return LQ.chart_liqs(candles, step)
+    except Exception as e:
+        return {"items": [], "error": str(e)[:120]}
 
 
 def norm_args(model, levs):
@@ -426,6 +480,48 @@ def get_data(tf, model=None, levs=None):
             for k in sorted(_cache, key=lambda k: _cache[k][0])[:10]:
                 del _cache[k]
     return data
+
+
+# ───────────── Validación con liquidaciones reales ─────────────
+_val_cache = {}
+VAL_TTL = int(os.getenv("VAL_TTL", "300"))
+
+
+def run_validation(tf, levs):
+    candles = fetch_candles(tf)
+    price = candles[-1]["close"]
+    step = TF_SECONDS[tf]
+    t0, t1 = candles[0]["time"], candles[-1]["time"] + step
+    events = LQ.events_between(t0, t1)
+    covered = LQ.covered_minutes(t0, t1)
+    tiers = tiers_from(levs)
+    res = {"tf": tf, "levs": [l for l, _ in tiers], "from": t0, "to": t1, "models": {}, "notes": []}
+    sources, errs = load_sources(tf, candles)
+    res["notes"] += errs
+    for model in ("oi", "vol"):
+        if model == "oi" and not sources:
+            continue
+        out = {}
+        heat, _ = estimate_heat(candles, sources if model == "oi" else {}, price, tiers, model, out=out)
+        res["models"][model] = LQ.validate(candles, step, heat, out["touches"], events, covered)
+    res["collectors"] = LQ.status()
+    res["db"] = LQ.db_counts()
+    res["updated"] = int(time.time())
+    return res
+
+
+def get_validation(tf, levs):
+    _, levs = norm_args(None, levs)
+    key = (tf, levs)
+    now = time.time()
+    with _lock:
+        hit = _val_cache.get(key)
+        if hit and now - hit[0] < VAL_TTL:
+            return hit[1]
+    res = run_validation(tf, levs)
+    with _lock:
+        _val_cache[key] = (now, res)
+    return res
 
 
 # ───────────── Alertas Telegram ─────────────
@@ -518,6 +614,7 @@ def start_alerts():
 
 
 start_alerts()
+LQ.start()
 
 
 # ───────────── Rutas ─────────────
@@ -541,6 +638,36 @@ def api_data():
         return jsonify(get_data(tf, model, levs))
     except Exception as e:
         return jsonify({"error": str(e)}), 502
+
+
+def parse_levs():
+    return [int(x) for x in request.args.get("lev", "").split(",") if x.strip()]
+
+
+@app.route("/api/validate")
+def api_validate():
+    if not authorized():
+        return jsonify({"error": "clave de acceso incorrecta"}), 401
+    tf = request.args.get("tf", "5m")
+    if tf not in TF_SECONDS:
+        return jsonify({"error": "tf no válido"}), 400
+    try:
+        levs = parse_levs()
+    except ValueError:
+        return jsonify({"error": "lev no válido"}), 400
+    try:
+        return jsonify(get_validation(tf, levs))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/status")
+def api_status():
+    try:
+        db = LQ.db_counts()
+    except Exception as e:
+        db = {"error": str(e)[:120]}
+    return jsonify({"collectors": LQ.status(), "db": db, "mark": LQ.MARK, "data_dir": LQ.DATA_DIR})
 
 
 @app.route("/api/price")
