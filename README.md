@@ -46,3 +46,8 @@ VAL_TTL             segundos de caché de la validación (300)
 
 /api/validate    resultado de la validación (tf, lev)
 /api/status      estado de los recolectores y de la base de datos
+
+## Gráfico (v5)
+- Mercado: Binance Futuros, BTCUSDT perpetuo (el mismo que en la app de Binance → Futuros USDⓈ-M).
+- Hora: la del dispositivo de cada persona (como la app de Binance). Los datos internos siguen en UTC.
+- Tiempo real: velas oficiales de Binance (kline), precio tick a tick (aggTrade) y liquidaciones de Binance al instante.

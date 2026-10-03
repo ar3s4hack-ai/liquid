@@ -98,11 +98,24 @@ let lines = [], lastSig = '', version = 0;
 let livePrice = null, previousLivePrice = null, ws = null, wsRetry = null, priceLine = null, lastLiveUi = 0;
 let wsLive = false, liveBar = null, showLiq = true, valTimer = null;
 
+// Hora local del dispositivo (la misma que muestra la app de Binance); los datos siguen en UTC.
+function fmtLocalFull(t) {
+  return new Date(t * 1000).toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+function tickLocal(t, type) {
+  const d = new Date(t * 1000);
+  if (type === 0) return String(d.getFullYear());
+  if (type === 1) return d.toLocaleString('es-ES', { month: 'short' });
+  if (type === 2) return d.toLocaleString('es-ES', { day: 'numeric', month: 'short' });
+  return d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+}
+
 const chart = LightweightCharts.createChart(document.getElementById('chart'), {
   autoSize: true,
+  localization: { locale: 'es-ES', timeFormatter: fmtLocalFull },
   layout: { background: { type: 'solid', color: 'rgba(0,0,0,0)' }, textColor: '#cfd6e4' },
   grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
-  timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#2b3550', rightOffset: 18 },
+  timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#2b3550', rightOffset: 18, tickMarkFormatter: tickLocal },
   rightPriceScale: { borderColor: '#2b3550' }
 });
 const series = chart.addCandlestickSeries({
@@ -273,7 +286,7 @@ function fmtM(x) { return x >= 1e9 ? (x / 1e9).toFixed(2) + 'B' : x >= 1e6 ? (x 
 function updateHeader() {
   if (!data) { hdr.textContent = ''; return; }
   const min = (cfg.minPct / 100) * data.heat.max;
-  const parts = ['BINANCE:' + data.symbol, tf, MODEL_NAME[data.model] || data.model];
+  const parts = ['BINANCE:' + data.symbol + '.P (perpetuo)', tf + ' · hora local', MODEL_NAME[data.model] || data.model];
   if (data.model !== 'cg') parts.push('Pools ' + data.levs.map(l => l + 'X').join('+'));
   parts.push('Total ≥ ' + fmtM(min), 'maxHeat ' + fmtM(data.heat.max));
   hdr.textContent = parts.join(' · ');
@@ -322,11 +335,20 @@ function updateStatus() {
 }
 
 // ───── precio en directo (WebSocket de Binance Futures)
+function flushLive(force) {
+  const now = Date.now();
+  if (!data || (!force && now - lastLiveUi < 330)) return;
+  lastLiveUi = now;
+  if (livePrice !== null) setPriceLine(livePrice, previousLivePrice === null || livePrice >= previousLivePrice ? '#26a69a' : '#ef5350');
+  if (liveBar) series.update({ ...liveBar });
+  updateZones(); updateStatus();
+}
+
 function updateLivePrice(price, tradeMs) {
   if (!Number.isFinite(price) || price <= 0) return;
   previousLivePrice = livePrice;
   livePrice = price;
-  // la última vela sigue al precio en directo (o se abre una nueva)
+  // entre mensajes de vela, el precio tick a tick mueve la vela actual
   if (liveBar) {
     const t = Math.floor((tradeMs || Date.now()) / 1000 / TFS[tf]) * TFS[tf];
     if (t > liveBar.time) liveBar = { time: t, open: price, high: price, low: price, close: price };
@@ -336,32 +358,56 @@ function updateLivePrice(price, tradeMs) {
       if (price < liveBar.low) liveBar.low = price;
     }
   }
-  // pantalla: como máximo 3 veces por segundo
-  const now = Date.now();
-  if (data && now - lastLiveUi > 330) {
-    lastLiveUi = now;
-    setPriceLine(price, previousLivePrice === null || price >= previousLivePrice ? '#26a69a' : '#ef5350');
-    if (liveBar) series.update({ ...liveBar });
-    updateZones(); updateStatus();
-  }
+  flushLive(false);
+}
+
+function onKline(k) {
+  // vela oficial de Binance: manda sobre la reconstrucción tick a tick
+  if (!k || k.i !== tf) return;
+  const t = Math.floor(k.t / 1000);
+  if (liveBar && t < liveBar.time) return;
+  liveBar = { time: t, open: +k.o, high: +k.h, low: +k.l, close: +k.c };
+  flushLive(false);
+}
+
+function onForceOrder(o) {
+  // liquidación real de Binance al instante (Bybit y OKX llegan con la recarga de cada minuto)
+  if (!o || !data || !data.liqs || !data.liqs.items) return;
+  const px = +o.ap || +o.p, qty = +o.z || +o.q;
+  if (!(px > 0 && qty > 0) || px * qty < 5000) return;
+  const t = Math.floor(o.T / 1000 / TFS[tf]) * TFS[tf];
+  data.liqs.items.push([t, px, o.S === 'SELL' ? 1 : -1, Math.round(px * qty)]);
+  version++;
 }
 
 function connectBinance() {
-  if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+  if (ws) {
+    const old = ws;
+    old.onopen = old.onmessage = old.onerror = old.onclose = null;
+    try { old.close(); } catch (e) {}
+    ws = null;
+  }
   if (wsRetry) { clearTimeout(wsRetry); wsRetry = null; }
-  const symbol = String((data && data.symbol) || 'BTCUSDT').toLowerCase();
-  const url = `wss://fstream.binance.com/ws/${symbol}@aggTrade`;
-  try { ws = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
-  ws.onopen = () => { wsLive = true; if (data) updateStatus(); };
-  ws.onmessage = (event) => {
+  wsLive = false;
+  const sym = String((data && data.symbol) || 'BTCUSDT').toLowerCase();
+  const url = `wss://fstream.binance.com/stream?streams=${sym}@aggTrade/${sym}@kline_${tf}/${sym}@forceOrder`;
+  let sock;
+  try { sock = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
+  ws = sock;
+  sock.onopen = () => { if (ws !== sock) return; wsLive = true; if (data) updateStatus(); };
+  sock.onmessage = (event) => {
+    if (ws !== sock) return;
     try {
       const msg = JSON.parse(event.data);
-      const price = parseFloat(msg.p);   // p = precio ejecutado
-      if (Number.isFinite(price)) { wsLive = true; updateLivePrice(price, msg.T); }
+      const d = msg.data || msg;
+      wsLive = true;
+      if (d.e === 'aggTrade') updateLivePrice(parseFloat(d.p), d.T);
+      else if (d.e === 'kline') onKline(d.k);
+      else if (d.e === 'forceOrder') onForceOrder(d.o);
     } catch (e) { console.warn('WS parse error', e); }
   };
-  ws.onerror = () => { try { ws.close(); } catch (e) {} };
-  ws.onclose = () => { wsLive = false; if (data) updateStatus(); scheduleReconnect(); };
+  sock.onerror = () => { try { sock.close(); } catch (e) {} };
+  sock.onclose = () => { if (ws !== sock) return; wsLive = false; if (data) updateStatus(); scheduleReconnect(); };
 }
 
 function scheduleReconnect() {
@@ -379,7 +425,8 @@ async function load() {
     series.setData(d.candles);
     // línea de precio inmediata con el último precio conocido
     const lc = d.candles[d.candles.length - 1];
-    liveBar = { ...lc };
+    if (!liveBar || liveBar.time < lc.time) liveBar = { ...lc };
+    else series.update({ ...liveBar });
     if (livePrice === null) livePrice = d.price;
     setPriceLine(livePrice);
     if (first) {
@@ -508,6 +555,7 @@ document.querySelectorAll('button[data-tf]').forEach(btn => {
     btn.classList.add('on');
     tf = btn.dataset.tf; first = true; data = null; lastSig = ''; livePrice = null; liveBar = null;
     ctx.clearRect(0, 0, cv.width, cv.height);
+    connectBinance();
     load();
   };
 });
