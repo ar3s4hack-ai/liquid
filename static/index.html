@@ -3,1864 +3,417 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-
 <title>Liquidation Heatmap BTC</title>
-
 <style>
-
-html,
-body{
-    margin:0;
-    height:100%;
-    background:#0b0e14;
-    color:#cfd6e4;
-    font-family:system-ui,-apple-system,sans-serif;
-    overflow:hidden;
-}
-
-#bar{
-    position:absolute;
-    top:0;
-    left:0;
-    right:0;
-    z-index:5;
-
-    display:flex;
-    flex-wrap:wrap;
-    gap:6px;
-    align-items:center;
-
-    padding:8px 10px;
-    padding-top:calc(
-        8px +
-        env(safe-area-inset-top)
-    );
-}
-
-button{
-    background:#1a2030;
-    color:#cfd6e4;
-
-    border:1px solid #2b3550;
-    border-radius:6px;
-
-    padding:6px 10px;
-    font-size:14px;
-
-    cursor:pointer;
-}
-
-button:hover{
-    background:#222a3d;
-}
-
-button.on{
-    background:#2D6CDF;
-    border-color:#2D6CDF;
-    color:#fff;
-}
-
-button.tg.on{
-    background:#7B2CBF;
-    border-color:#7B2CBF;
-}
-
-#st{
-    margin-left:auto;
-
-    font-size:11px;
-    text-align:right;
-    line-height:1.3;
-
-    min-width:150px;
-}
-
-#wrap{
-    position:absolute;
-    left:0;
-    right:0;
-    bottom:0;
-
-    top:90px;
-}
-
-#heat,
-#chart{
-    position:absolute;
-    inset:0;
-
-    width:100%;
-    height:100%;
-}
-
-#heat{
-    z-index:1;
-    pointer-events:none;
-}
-
-#chart{
-    z-index:2;
-}
-
-#zones{
-    position:absolute;
-
-    left:8px;
-    bottom:36px;
-
-    z-index:6;
-
-    background:rgba(
-        11,
-        14,
-        20,
-        .82
-    );
-
-    border:1px solid #2b3550;
-    border-radius:8px;
-
-    padding:6px 8px;
-
-    font-size:12px;
-    line-height:1.5;
-
-    max-width:75%;
-}
-
-.L{
-    color:#ff9f1c;
-}
-
-.S{
-    color:#2ec4ff;
-}
-
-.src-cg{
-    color:#FFD60A;
-}
-
-.src-es{
-    color:#7fb0ff;
-}
-
-.rt{
-    color:#26a69a;
-}
-
-.err{
-    color:#ef5350;
-}
-
-.price-live{
-    color:#26a69a;
-    font-weight:700;
-}
-
-.price-offline{
-    color:#ef5350;
-    font-weight:700;
-}
-
+html,body{margin:0;height:100%;background:#000;color:#cfd6e4;font-family:system-ui,-apple-system,sans-serif;overflow:hidden}
+#bar{position:absolute;top:0;left:0;right:0;z-index:5;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top));background:#0b0e14}
+button{background:#1a2030;color:#cfd6e4;border:1px solid #2b3550;border-radius:6px;padding:6px 10px;font-size:14px;cursor:pointer}
+button:hover{background:#222a3d}
+button.on{background:#2D6CDF;border-color:#2D6CDF;color:#fff}
+button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
+#st{margin-left:auto;font-size:11px;text-align:right;line-height:1.3;min-width:150px}
+#wrap{position:absolute;left:0;right:0;bottom:0;top:90px}
+#heat,#chart{position:absolute;inset:0;width:100%;height:100%}
+#heat{z-index:1;pointer-events:none}
+#chart{z-index:2}
+#hdr{position:absolute;left:8px;top:6px;z-index:6;font-size:11px;color:#aab3c5;pointer-events:none;text-shadow:0 0 3px #000}
+#zones{position:absolute;left:8px;bottom:36px;z-index:6;background:rgba(11,14,20,.85);border:1px solid #2b3550;border-radius:8px;padding:6px 8px;font-size:12px;line-height:1.5;max-width:75%}
+#cfg{position:absolute;right:8px;top:6px;z-index:8;background:rgba(11,14,20,.96);border:1px solid #2b3550;border-radius:10px;padding:10px;font-size:13px;display:none;width:250px}
+#cfg .row{margin-bottom:10px}
+#cfg .lbl{font-size:11px;color:#aab3c5;margin-bottom:4px}
+#cfg button{padding:5px 9px;font-size:13px;margin:0 4px 4px 0}
+#cfg input[type=range]{width:100%}
+.L{color:#ff9f1c}.S{color:#2ec4ff}.src-cg{color:#FFD60A}.src-es{color:#7fb0ff}.err{color:#ef5350}.rt{color:#26a69a}
+.price-live{color:#26a69a;font-weight:700}.price-offline{color:#ef5350;font-weight:700}
 </style>
 </head>
-
 <body>
-
 <div id="bar">
-
-    <button data-tf="5m">
-        5m
-    </button>
-
-    <button
-        data-tf="15m"
-        class="on"
-    >
-        15m
-    </button>
-
-    <button data-tf="1h">
-        1h
-    </button>
-
-    <button data-tf="4h">
-        4h
-    </button>
-
-    <button
-        id="bMode"
-        class="tg"
-    >
-        Calor
-    </button>
-
-    <button
-        id="bAsia"
-        class="tg on"
-    >
-        Asia
-    </button>
-
-    <button
-        id="bZones"
-        class="tg on"
-    >
-        Zonas
-    </button>
-
-    <button
-        id="bProf"
-        class="tg on"
-    >
-        Perfil
-    </button>
-
-    <div id="st">
-        cargando…
-    </div>
-
+  <button data-tf="5m" class="on">5m</button>
+  <button data-tf="15m">15m</button>
+  <button data-tf="1h">1h</button>
+  <button data-tf="4h">4h</button>
+  <button id="bMode" class="tg">Calor</button>
+  <button id="bAsia" class="tg on">Asia</button>
+  <button id="bZones" class="tg on">Zonas</button>
+  <button id="bProf" class="tg on">Perfil</button>
+  <button id="bCfg">⚙</button>
+  <div id="st">cargando…</div>
 </div>
-
 <div id="wrap">
-
-    <canvas id="heat"></canvas>
-
-    <div id="chart"></div>
-
-    <div id="zones"></div>
-
+  <canvas id="heat"></canvas><div id="chart"></div>
+  <div id="hdr"></div><div id="zones"></div>
+  <div id="cfg">
+    <div class="row"><div class="lbl">Modelo</div><div id="cModel"></div></div>
+    <div class="row"><div class="lbl">Apalancamientos</div><div id="cLev"></div></div>
+    <div class="row"><div class="lbl">Paleta</div><div id="cPal"></div></div>
+    <div class="row"><div class="lbl">Mostrar solo desde: <span id="cMinV"></span>% de la zona más fuerte</div>
+      <input type="range" id="cMin" min="0" max="40" step="1"></div>
+  </div>
 </div>
-
-
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-
-
 <script>
-
-const K =
-    new URLSearchParams(
-        location.search
-    ).get('k');
-
-
-const TFS = {
-
-    '5m':300,
-    '15m':900,
-    '1h':3600,
-    '4h':14400
-
-};
-
-
-const bar =
-    document.getElementById(
-        'bar'
-    );
-
-const wrap =
-    document.getElementById(
-        'wrap'
-    );
-
-const cv =
-    document.getElementById(
-        'heat'
-    );
-
-const ctx =
-    cv.getContext('2d');
-
-const st =
-    document.getElementById(
-        'st'
-    );
-
-const zonesEl =
-    document.getElementById(
-        'zones'
-    );
-
-const bMode =
-    document.getElementById(
-        'bMode'
-    );
-
-const bAsia =
-    document.getElementById(
-        'bAsia'
-    );
-
-const bZones =
-    document.getElementById(
-        'bZones'
-    );
-
-const bProf =
-    document.getElementById(
-        'bProf'
-    );
-
-
-let tf = '15m';
-
-let data = null;
-
-let first = true;
-
-let sideMode = false;
-
-let showAsia = true;
-
-let showZones = true;
-
-let showProf = true;
-
-let lines = [];
-
-let lastSig = '';
-
-let version = 0;
-
-
-/*
- * Precio real recibido desde Binance.
- */
-let livePrice = null;
-
-let previousLivePrice = null;
-
-let ws = null;
-
-let wsRetry = null;
-
-let priceLine = null;
-
-
-/* ─────────────────────────────
-   CHART
-───────────────────────────── */
-
-const chart =
-    LightweightCharts.createChart(
-        document.getElementById(
-            'chart'
-        ),
-        {
-
-            autoSize:true,
-
-            layout:{
-                background:{
-                    type:'solid',
-                    color:'rgba(0,0,0,0)'
-                },
-
-                textColor:'#cfd6e4'
-            },
-
-            grid:{
-                vertLines:{
-                    color:
-                        'rgba(255,255,255,0.04)'
-                },
-
-                horzLines:{
-                    color:
-                        'rgba(255,255,255,0.04)'
-                }
-            },
-
-            timeScale:{
-                timeVisible:true,
-                secondsVisible:false,
-                borderColor:'#2b3550',
-                rightOffset:18
-            },
-
-            rightPriceScale:{
-                borderColor:'#2b3550'
-            }
-
-        }
-    );
-
-
-const series =
-    chart.addCandlestickSeries({
-
-        upColor:'#26a69a',
-
-        downColor:'#ef5350',
-
-        borderVisible:false,
-
-        wickUpColor:'#26a69a',
-
-        wickDownColor:'#ef5350'
-
-    });
-
-
-/*
- * Línea de precio REAL.
- */
-priceLine =
-    series.createPriceLine({
-
-        price:0,
-
-        color:'#26a69a',
-
-        lineWidth:2,
-
-        lineStyle:0,
-
-        axisLabelVisible:true,
-
-        title:'BTC REAL'
-
-    });
-
-
-/* ─────────────────────────────
-   LAYOUT
-───────────────────────────── */
-
-function layout(){
-
-    wrap.style.top =
-        bar.offsetHeight +
-        'px';
-
+const K = new URLSearchParams(location.search).get('k');
+const TFS = { '5m': 300, '15m': 900, '1h': 3600, '4h': 14400 };
+const ALL = [10, 25, 50, 100];
+const TIER_COL = { 10: '#4f8cff', 25: '#2bd96b', 50: '#ffd60a', 100: '#ff4d4d' };
+const MODEL_NAME = { oi: 'Open Interest', vol: 'Volumen', cg: 'Coinglass' };
+const WARM = [[0, 0, 110], [0, 150, 150], [0, 200, 0], [240, 240, 0], [255, 0, 0]];
+const COOL = [[123, 44, 191], [45, 108, 223], [255, 214, 10]];
+
+let cfg = { model: 'oi', levs: [10, 25, 50, 100], palette: 'warm', minPct: 4 };
+try { Object.assign(cfg, JSON.parse(localStorage.getItem('liq_cfg') || '{}')); } catch (e) {}
+function saveCfg() { try { localStorage.setItem('liq_cfg', JSON.stringify(cfg)); } catch (e) {} }
+
+const bar = document.getElementById('bar');
+const wrap = document.getElementById('wrap');
+const cv = document.getElementById('heat');
+const ctx = cv.getContext('2d');
+const st = document.getElementById('st');
+const zonesEl = document.getElementById('zones');
+const hdr = document.getElementById('hdr');
+const cfgEl = document.getElementById('cfg');
+const bMode = document.getElementById('bMode');
+const bAsia = document.getElementById('bAsia');
+const bZones = document.getElementById('bZones');
+const bProf = document.getElementById('bProf');
+const bCfg = document.getElementById('bCfg');
+let tf = '5m', data = null, first = true, sideMode = false, showAsia = true, showZones = true, showProf = true;
+let lines = [], lastSig = '', version = 0;
+// Precio real recibido desde Binance (WebSocket)
+let livePrice = null, previousLivePrice = null, ws = null, wsRetry = null, priceLine = null, lastLiveUi = 0;
+let wsLive = false, liveBar = null;
+
+const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+  autoSize: true,
+  layout: { background: { type: 'solid', color: 'rgba(0,0,0,0)' }, textColor: '#cfd6e4' },
+  grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
+  timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#2b3550', rightOffset: 18 },
+  rightPriceScale: { borderColor: '#2b3550' }
+});
+const series = chart.addCandlestickSeries({
+  upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+  wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+});
+
+// Línea de precio REAL: se crea con el primer precio conocido (nunca en 0)
+function setPriceLine(price, color) {
+  if (!priceLine) priceLine = series.createPriceLine({ price, color: color || '#26a69a', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'BTC REAL' });
+  else priceLine.applyOptions(color ? { price, color } : { price });
 }
 
+function layout() { wrap.style.top = bar.offsetHeight + 'px'; }
 
-/* ─────────────────────────────
-   COLOR HEATMAP
-───────────────────────────── */
-
-function ramp(r){
-
-    const a =
-        [123,44,191];
-
-    const b =
-        [45,108,223];
-
-    const c =
-        [255,214,10];
-
-    let f,
-        t,
-        k;
-
-    if(r < 0.5){
-
-        f = a;
-
-        t = b;
-
-        k =
-            r / 0.5;
-
-    }else{
-
-        f = b;
-
-        t = c;
-
-        k =
-            (r - 0.5) / 0.5;
-
-    }
-
-    return f.map(
-        (v,i) =>
-            Math.round(
-                v +
-                (
-                    t[i] -
-                    v
-                ) *
-                k
-            )
-    );
-
+function rampN(stops, k) {
+  const n = stops.length - 1;
+  const x = Math.min(0.999999, Math.max(0, k)) * n;
+  const i = Math.floor(x), f = x - i;
+  return stops[i].map((v, j) => Math.round(v + (stops[i + 1][j] - v) * f));
 }
 
-
-function fillFor(
-    ratio,
-    longShare
-){
-
-    const k =
-        Math.pow(
-            ratio,
-            0.55
-        );
-
-    const alpha =
-        (
-            0.12 +
-            0.78 * k
-        ).toFixed(2);
-
-    if(sideMode){
-
-        return (
-            longShare >= 0.5
-
-            ?
-
-            `rgba(
-                255,
-                159,
-                28,
-                ${alpha}
-            )`
-
-            :
-
-            `rgba(
-                46,
-                196,
-                255,
-                ${alpha}
-            )`
-        );
-
-    }
-
-    const [
-        r,
-        g,
-        b
-    ] =
-        ramp(k);
-
-    return (
-        `rgba(
-            ${r},
-            ${g},
-            ${b},
-            ${alpha}
-        )`
-    );
-
+function fillFor(ratio, longShare) {
+  const k = Math.pow(ratio, 0.55);
+  if (sideMode) {
+    const a = (0.2 + 0.7 * k).toFixed(2);
+    return longShare >= 0.5 ? `rgba(255,159,28,${a})` : `rgba(46,196,255,${a})`;
+  }
+  const warm = cfg.palette === 'warm';
+  const [r, g, b] = rampN(warm ? WARM : COOL, k);
+  const a = warm ? 0.4 + 0.58 * k : 0.12 + 0.78 * k;
+  return `rgba(${r},${g},${b},${a.toFixed(2)})`;
 }
 
+function profWidth(w) { return Math.min(w * 0.22, 280); }
 
-/* ─────────────────────────────
-   SIGNATURE
-───────────────────────────── */
-
-function signature(){
-
-    if(!data){
-        return '';
-    }
-
-    const ts =
-        chart.timeScale();
-
-    const cs =
-        data.candles;
-
-    return [
-
-        wrap.clientWidth,
-
-        wrap.clientHeight,
-
-        livePrice,
-
-        series.priceToCoordinate(
-            data.price
-        ),
-
-        series.priceToCoordinate(
-            data.price * 1.01
-        ),
-
-        ts.timeToCoordinate(
-            cs[0].time
-        ),
-
-        ts.timeToCoordinate(
-            cs[
-                cs.length - 1
-            ].time
-        ),
-
-        ts.options().barSpacing,
-
-        sideMode,
-
-        showProf,
-
-        version
-
-    ].join('|');
-
+function signature() {
+  const ts = chart.timeScale();
+  const cs = data.candles;
+  return [wrap.clientWidth, wrap.clientHeight,
+    series.priceToCoordinate(data.price), series.priceToCoordinate(data.price * 1.01),
+    ts.timeToCoordinate(cs[0].time), ts.timeToCoordinate(cs[cs.length - 1].time),
+    ts.options().barSpacing, sideMode, showProf, cfg.palette, cfg.minPct, version].join('|');
 }
 
-
-/* ─────────────────────────────
-   HEATMAP TEMPORAL
-───────────────────────────── */
-
-function drawTime(w){
-
-    const ts =
-        chart.timeScale();
-
-    const bs =
-        ts.options().barSpacing;
-
-    const lastT =
-        data.candles[
-            data.candles.length - 1
-        ].time;
-
-    const xLast =
-        ts.timeToCoordinate(
-            lastT
-        );
-
-    const half =
-        data.heat.size / 2;
-
-    const max =
-        data.heat.max;
-
-    if(
-        !(max > 0)
-        ||
-        xLast === null
-    ){
-        return;
-    }
-
-    for(
-        const [
-            p,
-            t0,
-            t1,
-            L,
-            S
-        ]
-        of data.heat.segments
-    ){
-
-        const ratio =
-            Math.min(
-                1,
-                (L + S) / max
-            );
-
-        if(
-            ratio < 0.04
-        ){
-            continue;
-        }
-
-        const y1 =
-            series.priceToCoordinate(
-                p + half
-            );
-
-        const y2 =
-            series.priceToCoordinate(
-                p - half
-            );
-
-        let x1 =
-            ts.timeToCoordinate(
-                t0
-            );
-
-        let x2 =
-            t1 >= lastT
-            ?
-            xLast
-            :
-            ts.timeToCoordinate(
-                t1
-            );
-
-        if(
-            y1 === null
-            ||
-            y2 === null
-            ||
-            x1 === null
-            ||
-            x2 === null
-        ){
-            continue;
-        }
-
-        x1 -= bs / 2;
-
-        x2 += bs / 2;
-
-        if(
-            x2 < 0
-            ||
-            x1 > w
-        ){
-            continue;
-        }
-
-        const xs =
-            Math.max(
-                0,
-                x1
-            );
-
-        ctx.fillStyle =
-            fillFor(
-                ratio,
-                L / (
-                    L + S
-                )
-            );
-
-        ctx.fillRect(
-
-            xs,
-
-            y1,
-
-            x2 - xs,
-
-            Math.max(
-                1,
-                y2 - y1
-            )
-
-        );
-
-    }
-
+function drawTime(w) {
+  const ts = chart.timeScale();
+  const bs = ts.options().barSpacing;
+  const lastT = data.candles[data.candles.length - 1].time;
+  const xLast = ts.timeToCoordinate(lastT);
+  const half = data.heat.size / 2;
+  const max = data.heat.max;
+  const minR = Math.max(0.005, cfg.minPct / 100);
+  if (!(max > 0) || xLast === null) return;
+  for (const [p, t0, t1, L, S] of data.heat.segments) {
+    const ratio = Math.min(1, (L + S) / max);
+    if (ratio < minR) continue;
+    const y1 = series.priceToCoordinate(p + half);
+    const y2 = series.priceToCoordinate(p - half);
+    let x1 = ts.timeToCoordinate(t0);
+    let x2 = t1 >= lastT ? xLast : ts.timeToCoordinate(t1);
+    if (y1 === null || y2 === null || x1 === null || x2 === null) continue;
+    x1 -= bs / 2; x2 += bs / 2;
+    if (x2 < 0 || x1 > w) continue;
+    const xs = Math.max(0, x1);
+    ctx.fillStyle = fillFor(ratio, L / (L + S));
+    ctx.fillRect(xs, y1, x2 - xs, Math.max(1, y2 - y1));
+  }
 }
 
-
-/* ─────────────────────────────
-   PERFIL
-───────────────────────────── */
-
-function drawProfile(w){
-
-    const act =
-        data.heat.active;
-
-    if(
-        !showProf
-        ||
-        !act
-        ||
-        !act.length
-    ){
-        return;
-    }
-
-    let mx = 0;
-
-    for(
-        const a
-        of act
-    ){
-
-        mx =
-            Math.max(
-                mx,
-                a[1] + a[2]
-            );
-
-    }
-
-    if(!(mx > 0)){
-        return;
-    }
-
-    const ps =
-        chart.priceScale(
-            'right'
-        );
-
-    const pw =
-        (
-            ps &&
-            ps.width &&
-            ps.width()
-        )
-        ||
-        70;
-
-    const xr =
-        w -
-        pw -
-        2;
-
-    const maxLen =
-        Math.min(
-            w * 0.14,
-            170
-        );
-
-    const half =
-        data.heat.size / 2;
-
-    for(
-        const [
-            p,
-            L,
-            S
-        ]
-        of act
-    ){
-
-        const y1 =
-            series.priceToCoordinate(
-                p + half
-            );
-
-        const y2 =
-            series.priceToCoordinate(
-                p - half
-            );
-
-        if(
-            y1 === null
-            ||
-            y2 === null
-        ){
-            continue;
-        }
-
-        const len =
-            Math.pow(
-                (L + S) / mx,
-                0.7
-            ) *
-            maxLen;
-
-        if(len < 1){
-            continue;
-        }
-
-        ctx.fillStyle =
-            L >= S
-            ?
-            'rgba(255,159,28,0.9)'
-            :
-            'rgba(46,196,255,0.9)';
-
-        ctx.fillRect(
-
-            xr - len,
-
-            y1,
-
-            len,
-
-            Math.max(
-                1,
-                y2 - y1
-            )
-
-        );
-
-    }
-
+function drawStatic(w) {
+  const half = data.heat.size / 2;
+  const max = data.heat.max;
+  const minR = Math.max(0.01, cfg.minPct / 100);
+  if (!(max > 0)) return;
+  for (const b of data.heat.bins) {
+    const ratio = b.value / max;
+    if (ratio < minR) continue;
+    const y1 = series.priceToCoordinate(b.price + half);
+    const y2 = series.priceToCoordinate(b.price - half);
+    if (y1 === null || y2 === null) continue;
+    ctx.fillStyle = fillFor(ratio, b.price < data.price ? 1 : 0);
+    ctx.fillRect(0, y1, w, Math.max(1, y2 - y1));
+  }
 }
 
-
-/* ─────────────────────────────
-   STATIC HEATMAP
-───────────────────────────── */
-
-function drawStatic(w){
-
-    const half =
-        data.heat.size / 2;
-
-    const max =
-        data.heat.max;
-
-    if(!(max > 0)){
-        return;
+function drawProfile(w) {
+  const act = data.heat.active;
+  if (!showProf || !act || !act.length) return;
+  let mx = 0;
+  for (const a of act) mx = Math.max(mx, a[1] + a[2]);
+  if (!(mx > 0)) return;
+  const ps = chart.priceScale('right');
+  const pw = (ps && ps.width && ps.width()) || 70;
+  const xr = w - pw - 2;
+  const maxLen = profWidth(w);
+  const half = data.heat.size / 2;
+  for (const [p, L, S, tv] of act) {
+    const y1 = series.priceToCoordinate(p + half);
+    const y2 = series.priceToCoordinate(p - half);
+    if (y1 === null || y2 === null) continue;
+    const len = Math.pow((L + S) / mx, 0.7) * maxLen;
+    if (len < 1) continue;
+    const hh = Math.max(1, y2 - y1);
+    const sum = tv ? tv.reduce((a, b) => a + b, 0) : 0;
+    if (sideMode || !tv || sum <= 0) {
+      ctx.fillStyle = L >= S ? 'rgba(255,159,28,0.92)' : 'rgba(46,196,255,0.92)';
+      ctx.fillRect(xr - len, y1, len, hh);
+    } else {
+      let x = xr;
+      for (let i = 0; i < ALL.length; i++) {
+        if (!tv[i]) continue;
+        const sl = len * tv[i] / sum;
+        ctx.fillStyle = TIER_COL[ALL[i]];
+        ctx.fillRect(x - sl, y1, sl, hh);
+        x -= sl;
+      }
     }
-
-    for(
-        const b
-        of data.heat.bins
-    ){
-
-        const ratio =
-            b.value / max;
-
-        if(
-            ratio < 0.06
-        ){
-            continue;
-        }
-
-        const y1 =
-            series.priceToCoordinate(
-                b.price + half
-            );
-
-        const y2 =
-            series.priceToCoordinate(
-                b.price - half
-            );
-
-        if(
-            y1 === null
-            ||
-            y2 === null
-        ){
-            continue;
-        }
-
-        ctx.fillStyle =
-            fillFor(
-                ratio,
-                b.price <
-                data.price
-                ?
-                1
-                :
-                0
-            );
-
-        ctx.fillRect(
-
-            0,
-
-            y1,
-
-            w,
-
-            Math.max(
-                1,
-                y2 - y1
-            )
-
-        );
-
-    }
-
+  }
 }
 
-
-/* ─────────────────────────────
-   RENDER
-───────────────────────────── */
-
-function render(){
-
-    requestAnimationFrame(
-        render
-    );
-
-    if(!data){
-        return;
-    }
-
-    const s =
-        signature();
-
-    if(
-        s === lastSig
-    ){
-        return;
-    }
-
-    lastSig = s;
-
-    const dpr =
-        window.devicePixelRatio ||
-        1;
-
-    const w =
-        wrap.clientWidth;
-
-    const h =
-        wrap.clientHeight;
-
-    if(
-        cv.width !==
-        Math.round(
-            w * dpr
-        )
-        ||
-        cv.height !==
-        Math.round(
-            h * dpr
-        )
-    ){
-
-        cv.width =
-            Math.round(
-                w * dpr
-            );
-
-        cv.height =
-            Math.round(
-                h * dpr
-            );
-
-    }
-
-    ctx.setTransform(
-        dpr,
-        0,
-        0,
-        dpr,
-        0,
-        0
-    );
-
-    ctx.clearRect(
-        0,
-        0,
-        w,
-        h
-    );
-
-    if(
-        data.heat.mode ===
-        'time'
-    ){
-
-        drawTime(w);
-
-    }else{
-
-        drawStatic(w);
-
-    }
-
-    drawProfile(w);
-
+function render() {
+  requestAnimationFrame(render);
+  if (!data) return;
+  const s = signature();
+  if (s === lastSig) return;
+  lastSig = s;
+  const dpr = window.devicePixelRatio || 1;
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (data.heat.mode === 'time') drawTime(w); else drawStatic(w);
+  drawProfile(w);
 }
 
+function fmt(x) { return Math.round(x).toLocaleString('es-ES'); }
+function fmtLive(x) { return Number(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtM(x) { return x >= 1e9 ? (x / 1e9).toFixed(2) + 'B' : x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : fmt(x); }
 
-/* ─────────────────────────────
-   FORMATO PRECIO
-───────────────────────────── */
-
-function fmt(x){
-
-    return Math.round(
-        x
-    ).toLocaleString(
-        'es-ES'
-    );
-
+function updateHeader() {
+  if (!data) { hdr.textContent = ''; return; }
+  const min = (cfg.minPct / 100) * data.heat.max;
+  const parts = ['BINANCE:' + data.symbol, tf, MODEL_NAME[data.model] || data.model];
+  if (data.model !== 'cg') parts.push('Pools ' + data.levs.map(l => l + 'X').join('+'));
+  parts.push('Total ≥ ' + fmtM(min), 'maxHeat ' + fmtM(data.heat.max));
+  hdr.textContent = parts.join(' · ');
 }
 
-
-function fmtLive(x){
-
-    return Number(
-        x
-    ).toLocaleString(
-        'en-US',
-        {
-            minimumFractionDigits:2,
-            maximumFractionDigits:2
-        }
-    );
-
+function updateZones() {
+  zonesEl.style.display = showZones && data && data.zones.length ? 'block' : 'none';
+  if (!data) return;
+  const rows = data.zones.slice(0, 5).map(z => {
+    const d = z.price - (livePrice ?? data.price);
+    const dots = z.ratio > 0.75 ? '●●●' : z.ratio > 0.45 ? '●●' : '●';
+    const cls = z.side === 'long' ? 'L' : 'S';
+    const lado = z.side === 'long' ? 'largos' : 'cortos';
+    return `<div class="${cls}">${fmt(z.price)} · ${d >= 0 ? '+' : '−'}${fmt(Math.abs(d))} pts · ${lado} ${dots}</div>`;
+  });
+  zonesEl.innerHTML = rows.join('');
 }
 
-
-/* ─────────────────────────────
-   ZONAS
-───────────────────────────── */
-
-function updateZones(){
-
-    zonesEl.style.display =
-        showZones &&
-        data &&
-        data.zones.length
-        ?
-        'block'
-        :
-        'none';
-
-    if(!data){
-        return;
-    }
-
-    const rows =
-        data.zones
-        .slice(0,5)
-        .map(
-            z => {
-
-                const current =
-                    livePrice ??
-                    data.price;
-
-                const d =
-                    z.price -
-                    current;
-
-                const dots =
-                    z.ratio > 0.75
-                    ?
-                    '●●●'
-                    :
-                    z.ratio > 0.45
-                    ?
-                    '●●'
-                    :
-                    '●';
-
-                const cls =
-                    z.side === 'long'
-                    ?
-                    'L'
-                    :
-                    'S';
-
-                const lado =
-                    z.side === 'long'
-                    ?
-                    'largos'
-                    :
-                    'cortos';
-
-                return `
-                    <div class="${cls}">
-                        ${fmt(z.price)}
-                        ·
-                        ${d >= 0 ? '+' : '−'}
-                        ${fmt(Math.abs(d))}
-                        pts
-                        ·
-                        ${lado}
-                        ${dots}
-                    </div>
-                `;
-
-            }
-        );
-
-    zonesEl.innerHTML =
-        rows.join('');
-
+function updateAsia() {
+  lines.forEach(l => series.removePriceLine(l));
+  lines = [];
+  series.setMarkers([]);
+  if (!showAsia || !data.asia) return;
+  const a = data.asia;
+  lines.push(series.createPriceLine({ price: a.high, color: '#e6e6e6', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Asia máx' }));
+  lines.push(series.createPriceLine({ price: a.low, color: '#e6e6e6', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Asia mín' }));
+  if (a.sweep) {
+    const t = a.sweep.time - (a.sweep.time % TFS[tf]);
+    const high = a.sweep.side === 'high';
+    series.setMarkers([{
+      time: t, position: high ? 'aboveBar' : 'belowBar', color: '#e6e6e6',
+      shape: high ? 'arrowDown' : 'arrowUp', text: 'barrido'
+    }]);
+  }
 }
 
-
-/* ─────────────────────────────
-   ASIA
-───────────────────────────── */
-
-function updateAsia(){
-
-    lines.forEach(
-        l =>
-            series.removePriceLine(
-                l
-            )
-    );
-
-    lines = [];
-
-    series.setMarkers([]);
-
-    if(
-        !showAsia
-        ||
-        !data.asia
-    ){
-        return;
-    }
-
-    const a =
-        data.asia;
-
-    lines.push(
-        series.createPriceLine({
-
-            price:a.high,
-
-            color:'#e6e6e6',
-
-            lineWidth:1,
-
-            lineStyle:2,
-
-            axisLabelVisible:true,
-
-            title:'Asia máx'
-
-        })
-    );
-
-    lines.push(
-        series.createPriceLine({
-
-            price:a.low,
-
-            color:'#e6e6e6',
-
-            lineWidth:1,
-
-            lineStyle:2,
-
-            axisLabelVisible:true,
-
-            title:'Asia mín'
-
-        })
-    );
-
-    if(a.sweep){
-
-        const t =
-            a.sweep.time -
-            (
-                a.sweep.time %
-                TFS[tf]
-            );
-
-        const high =
-            a.sweep.side ===
-            'high';
-
-        series.setMarkers([{
-
-            time:t,
-
-            position:
-                high
-                ?
-                'aboveBar'
-                :
-                'belowBar',
-
-            color:'#e6e6e6',
-
-            shape:
-                high
-                ?
-                'arrowDown'
-                :
-                'arrowUp',
-
-            text:'barrido'
-
-        }]);
-
-    }
-
+function updateStatus() {
+  const cls = data.source === 'coinglass' ? 'src-cg' : 'src-es';
+  const hora = new Date(data.updated * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  const current = livePrice ?? data.price;
+  const liveClass = wsLive ? 'price-live' : 'price-offline';
+  st.innerHTML = `<span class="${cls}">${data.source}</span> (${data.used.join('+')}) · ${hora}<br>` +
+    `<span class="${liveClass}">${fmtLive(current)}</span><br>` +
+    (wsLive ? '<span class="rt">● LIVE</span>' : '<span class="err">● OFFLINE</span>') +
+    (data.note ? `<br><span class="err">${String(data.note).slice(0, 70)}</span>` : '');
 }
 
-
-/* ─────────────────────────────
-   ESTADO
-───────────────────────────── */
-
-function updateStatus(){
-
-    const cls =
-        data.source ===
-        'coinglass'
-        ?
-        'src-cg'
-        :
-        'src-es';
-
-    const hora =
-        new Date(
-            data.updated *
-            1000
-        ).toLocaleTimeString(
-            'es-ES',
-            {
-                hour:'2-digit',
-                minute:'2-digit'
-            }
-        );
-
-    const current =
-        livePrice ??
-        data.price;
-
-    const liveClass =
-        livePrice !== null
-        ?
-        'price-live'
-        :
-        'price-offline';
-
-    st.innerHTML = `
-
-        <span class="${cls}">
-            ${data.source}
-        </span>
-
-        (${data.used.join('+')})
-
-        · ${hora}
-
-        <br>
-
-        <span class="${liveClass}">
-            ${fmtLive(current)}
-        </span>
-
-        <br>
-
-        ${
-            livePrice !== null
-            ?
-            '<span class="rt">● LIVE</span>'
-            :
-            '<span class="err">● OFFLINE</span>'
-        }
-
-        ${
-            data.note
-            ?
-            `<br>
-             <span class="err">
-                ${String(
-                    data.note
-                ).slice(0,70)}
-             </span>`
-            :
-            ''
-        }
-
-    `;
-
+// ───── precio en directo (WebSocket de Binance Futures)
+function updateLivePrice(price, tradeMs) {
+  if (!Number.isFinite(price) || price <= 0) return;
+  previousLivePrice = livePrice;
+  livePrice = price;
+  // la última vela sigue al precio en directo (o se abre una nueva)
+  if (liveBar) {
+    const t = Math.floor((tradeMs || Date.now()) / 1000 / TFS[tf]) * TFS[tf];
+    if (t > liveBar.time) liveBar = { time: t, open: price, high: price, low: price, close: price };
+    else if (t === liveBar.time) {
+      liveBar.close = price;
+      if (price > liveBar.high) liveBar.high = price;
+      if (price < liveBar.low) liveBar.low = price;
+    }
+  }
+  // pantalla: como máximo 3 veces por segundo
+  const now = Date.now();
+  if (data && now - lastLiveUi > 330) {
+    lastLiveUi = now;
+    setPriceLine(price, previousLivePrice === null || price >= previousLivePrice ? '#26a69a' : '#ef5350');
+    if (liveBar) series.update({ ...liveBar });
+    updateZones(); updateStatus();
+  }
 }
 
+function connectBinance() {
+  if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+  if (wsRetry) { clearTimeout(wsRetry); wsRetry = null; }
+  const symbol = String((data && data.symbol) || 'BTCUSDT').toLowerCase();
+  const url = `wss://fstream.binance.com/ws/${symbol}@aggTrade`;
+  try { ws = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
+  ws.onopen = () => { wsLive = true; if (data) updateStatus(); };
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      const price = parseFloat(msg.p);   // p = precio ejecutado
+      if (Number.isFinite(price)) { wsLive = true; updateLivePrice(price, msg.T); }
+    } catch (e) { console.warn('WS parse error', e); }
+  };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  ws.onclose = () => { wsLive = false; if (data) updateStatus(); scheduleReconnect(); };
+}
 
-/* ─────────────────────────────
-   ACTUALIZAR PRECIO LIVE
-───────────────────────────── */
+function scheduleReconnect() {
+  if (wsRetry) return;
+  wsRetry = setTimeout(() => { wsRetry = null; connectBinance(); }, 3000);
+}
 
-function updateLivePrice(
-    price
-){
-
-    if(
-        !Number.isFinite(price)
-        ||
-        price <= 0
-    ){
-        return;
+async function load() {
+  try {
+    const q = `tf=${tf}&model=${cfg.model}&lev=${cfg.levs.join(',')}` + (K ? '&k=' + encodeURIComponent(K) : '');
+    const r = await fetch('/api/data?' + q, { cache: 'no-store' });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    data = d;
+    series.setData(d.candles);
+    // línea de precio inmediata con el último precio conocido
+    const lc = d.candles[d.candles.length - 1];
+    liveBar = { ...lc };
+    if (livePrice === null) livePrice = d.price;
+    setPriceLine(livePrice);
+    if (first) {
+      const n = d.candles.length;
+      const extra = showProf ? 78 : 18;
+      chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 200), to: n + extra });
+      first = false;
     }
-
-    previousLivePrice =
-        livePrice;
-
-    livePrice =
-        price;
-
-    /*
-     * Mueve la línea inmediatamente.
-     */
-    if(priceLine){
-
-        priceLine.applyOptions({
-            price:price,
-
-            color:
-                previousLivePrice === null
-                ?
-                '#26a69a'
-                :
-                price >=
-                previousLivePrice
-                ?
-                '#26a69a'
-                :
-                '#ef5350'
-        });
-
-    }
-
-    /*
-     * Las distancias de las zonas
-     * se recalculan con el precio real.
-     */
-    updateZones();
-
-    updateStatus();
-
     version++;
-
+    updateAsia(); updateZones(); updateStatus(); updateHeader(); buildCfg();
+    // reconectar el WebSocket si se cayó o cambió el símbolo
+    if (!ws || ws.readyState > 1) connectBinance();   // solo si está cerrado o cerrándose
+  } catch (e) {
+    st.innerHTML = `<span class="err">Error: ${String(e.message).slice(0, 80)}</span>`;
+  }
 }
 
-
-/* ─────────────────────────────
-   BINANCE WEBSOCKET
-───────────────────────────── */
-
-function connectBinance(){
-
-    if(ws){
-
-        try{
-            ws.close();
-        }catch(e){}
-
-        ws = null;
-    }
-
-    if(wsRetry){
-
-        clearTimeout(
-            wsRetry
-        );
-
-        wsRetry = null;
-    }
-
-    const symbol =
-        String(
-            data?.symbol ||
-            'BTCUSDT'
-        ).toLowerCase();
-
-    const url =
-        `wss://fstream.binance.com/ws/${symbol}@trade`;
-
-    try{
-
-        ws =
-            new WebSocket(
-                url
-            );
-
-    }catch(e){
-
-        scheduleReconnect();
-
-        return;
-    }
-
-
-    ws.onopen = () => {
-
-        updateStatus();
-
-    };
-
-
-    ws.onmessage = (
-        event
-    ) => {
-
-        try{
-
-            const msg =
-                JSON.parse(
-                    event.data
-                );
-
-            /*
-             * Binance Futures trade stream:
-             *
-             * p = precio ejecutado
-             */
-            const price =
-                parseFloat(
-                    msg.p
-                );
-
-            if(
-                Number.isFinite(
-                    price
-                )
-            ){
-
-                updateLivePrice(
-                    price
-                );
-
-            }
-
-        }catch(e){
-
-            console.warn(
-                'WS parse error',
-                e
-            );
-
-        }
-
-    };
-
-
-    ws.onerror = () => {
-
-        try{
-            ws.close();
-        }catch(e){}
-
-    };
-
-
-    ws.onclose = () => {
-
-        livePrice = null;
-
-        updateStatus();
-
-        scheduleReconnect();
-
-    };
-
+// ───── panel de ajustes
+function chip(label, on, fn) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  if (on) b.classList.add('on');
+  b.onclick = fn;
+  return b;
 }
-
-
-function scheduleReconnect(){
-
-    if(wsRetry){
-        return;
-    }
-
-    wsRetry =
-        setTimeout(
-            () => {
-
-                wsRetry =
-                    null;
-
-                connectBinance();
-
-            },
-            3000
-        );
-
+function buildCfg() {
+  const models = (data && data.models) || ['oi', 'vol'];
+  const cm = document.getElementById('cModel'); cm.innerHTML = '';
+  models.forEach(m => cm.appendChild(chip(MODEL_NAME[m], cfg.model === m, () => { cfg.model = m; saveCfg(); data = null; lastSig = ''; load(); })));
+  const cl = document.getElementById('cLev'); cl.innerHTML = '';
+  ALL.forEach(l => cl.appendChild(chip(l + 'x', cfg.levs.includes(l), () => {
+    const next = cfg.levs.includes(l) ? cfg.levs.filter(x => x !== l) : cfg.levs.concat(l).sort((a, b) => a - b);
+    if (!next.length) return;
+    cfg.levs = next; saveCfg(); data = null; lastSig = ''; load();
+  })));
+  const cp = document.getElementById('cPal'); cp.innerHTML = '';
+  [['warm', 'Cálida'], ['cool', 'Fría']].forEach(([v, t]) => cp.appendChild(chip(t, cfg.palette === v, () => {
+    cfg.palette = v; saveCfg(); version++; buildCfg();
+  })));
+  document.getElementById('cMin').value = cfg.minPct;
+  document.getElementById('cMinV').textContent = cfg.minPct;
 }
-
-
-/* ─────────────────────────────
-   CARGAR DATOS
-───────────────────────────── */
-
-async function load(){
-
-    try{
-
-        const r =
-            await fetch(
-                '/api/data?tf=' +
-                tf +
-                (
-                    K
-                    ?
-                    '&k=' +
-                    encodeURIComponent(K)
-                    :
-                    ''
-                ),
-                {
-                    cache:'no-store'
-                }
-            );
-
-        const d =
-            await r.json();
-
-        if(d.error){
-
-            throw new Error(
-                d.error
-            );
-
-        }
-
-        data = d;
-
-        series.setData(
-            d.candles
-        );
-
-        /*
-         * Actualizar la línea
-         * inmediatamente con el
-         * último precio conocido.
-         */
-        if(
-            livePrice === null
-        ){
-
-            livePrice =
-                d.price;
-
-            if(priceLine){
-
-                priceLine.applyOptions({
-                    price:
-                        d.price
-                });
-
-            }
-
-        }
-
-        if(first){
-
-            const n =
-                d.candles.length;
-
-            chart.timeScale()
-                .setVisibleLogicalRange({
-
-                    from:
-                        Math.max(
-                            0,
-                            n - 160
-                        ),
-
-                    to:
-                        n + 16
-
-                });
-
-            first = false;
-
-        }
-
-        version++;
-
-        updateAsia();
-
-        updateZones();
-
-        updateStatus();
-
-        /*
-         * Reiniciar WebSocket
-         * cuando cambia el símbolo
-         * o se recarga el backend.
-         */
-        if(
-            !ws
-            ||
-            ws.readyState !==
-            WebSocket.OPEN
-        ){
-
-            connectBinance();
-
-        }
-
-    }catch(e){
-
-        st.innerHTML = `
-            <span class="err">
-                Error:
-                ${String(
-                    e.message
-                ).slice(0,80)}
-            </span>
-        `;
-
-    }
-
-}
-
-
-/* ─────────────────────────────
-   TIMEFRAME
-───────────────────────────── */
-
-document
-    .querySelectorAll(
-        'button[data-tf]'
-    )
-    .forEach(
-        btn => {
-
-            btn.onclick =
-                () => {
-
-                    document
-                        .querySelectorAll(
-                            'button[data-tf]'
-                        )
-                        .forEach(
-                            x =>
-                                x.classList
-                                .remove(
-                                    'on'
-                                )
-                        );
-
-                    btn.classList.add(
-                        'on'
-                    );
-
-                    tf =
-                        btn.dataset.tf;
-
-                    first = true;
-
-                    data = null;
-
-                    lastSig = '';
-
-                    livePrice = null;
-
-                    ctx.clearRect(
-                        0,
-                        0,
-                        cv.width,
-                        cv.height
-                    );
-
-                    load();
-
-                };
-
-        }
-    );
-
-
-/* ─────────────────────────────
-   MODO
-───────────────────────────── */
-
-bMode.onclick =
-    () => {
-
-        sideMode =
-            !sideMode;
-
-        bMode.textContent =
-            sideMode
-            ?
-            'Lado'
-            :
-            'Calor';
-
-        bMode.classList.toggle(
-            'on',
-            sideMode
-        );
-
-        version++;
-
-    };
-
-
-/* ─────────────────────────────
-   ASIA
-───────────────────────────── */
-
-bAsia.onclick =
-    () => {
-
-        showAsia =
-            !showAsia;
-
-        bAsia.classList.toggle(
-            'on',
-            showAsia
-        );
-
-        if(data){
-            updateAsia();
-        }
-
-    };
-
-
-/* ─────────────────────────────
-   ZONAS
-───────────────────────────── */
-
-bZones.onclick =
-    () => {
-
-        showZones =
-            !showZones;
-
-        bZones.classList.toggle(
-            'on',
-            showZones
-        );
-
-        updateZones();
-
-    };
-
-
-/* ─────────────────────────────
-   PERFIL
-───────────────────────────── */
-
-bProf.onclick =
-    () => {
-
-        showProf =
-            !showProf;
-
-        bProf.classList.toggle(
-            'on',
-            showProf
-        );
-
-        version++;
-
-    };
-
-
-/* ─────────────────────────────
-   RESIZE
-───────────────────────────── */
-
-window.addEventListener(
-    'resize',
-    layout
-);
-
-
-/* ─────────────────────────────
-   START
-───────────────────────────── */
-
+document.getElementById('cMin').oninput = (e) => {
+  cfg.minPct = +e.target.value; saveCfg(); version++;
+  document.getElementById('cMinV').textContent = cfg.minPct; updateHeader();
+};
+bCfg.onclick = () => { cfgEl.style.display = cfgEl.style.display === 'block' ? 'none' : 'block'; };
+
+document.querySelectorAll('button[data-tf]').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('button[data-tf]').forEach(x => x.classList.remove('on'));
+    btn.classList.add('on');
+    tf = btn.dataset.tf; first = true; data = null; lastSig = ''; livePrice = null; liveBar = null;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    load();
+  };
+});
+bMode.onclick = () => {
+  sideMode = !sideMode;
+  bMode.textContent = sideMode ? 'Lado' : 'Calor';
+  bMode.classList.toggle('on', sideMode);
+  version++;
+};
+bAsia.onclick = () => { showAsia = !showAsia; bAsia.classList.toggle('on', showAsia); if (data) updateAsia(); };
+bZones.onclick = () => { showZones = !showZones; bZones.classList.toggle('on', showZones); updateZones(); };
+bProf.onclick = () => { showProf = !showProf; bProf.classList.toggle('on', showProf); };
+
+window.addEventListener('resize', layout);
 layout();
-
-requestAnimationFrame(
-    render
-);
-
+buildCfg();
+requestAnimationFrame(render);
 load();
-
-
-/*
- * El heatmap se actualiza cada
- * 60 segundos.
- *
- * El PRECIO NO:
- * el precio viene por WebSocket
- * prácticamente en tiempo real.
- */
-setInterval(
-    load,
-    60000
-);
-
+setInterval(load, 60000);
 </script>
-
 </body>
 </html>

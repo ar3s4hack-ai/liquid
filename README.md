@@ -19,8 +19,12 @@ ALERT_MIN_RATIO     intensidad mínima de zona, 0 a 1 (0.6)
 ALERT_COOLDOWN_MIN  minutos entre avisos de la misma zona (60)
 ASIA_START_UTC / ASIA_END_UTC   rango asiático en hora UTC (0 y 7)
 USE_BYBIT           1 suma el Open Interest de Bybit, 0 solo Binance (1)
+DEFAULT_MODEL       modelo inicial: oi (Open Interest), vol (volumen) o cg (Coinglass, necesita clave)
+ZONE_GAP_PCT        distancia máxima (en %) para unir niveles vecinos en una zona (0.04)
+RANGE_PCT           rango de precio dibujado alrededor del precio actual, en % (8)
 BIN_PCT             grosor de cada línea del heatmap en % del precio (0.02 ≈ 17 puntos; más alto = más grueso)
 
 ## Comprobaciones
 /health          responde ok
+/api/price       precio actual de Binance (respaldo del precio en directo)
 /api/test-alert  envía un mensaje de prueba a Telegram
