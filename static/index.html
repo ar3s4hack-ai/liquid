@@ -29,6 +29,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 #cfg .lbl{font-size:11px;color:#aab3c5;margin-bottom:4px}
 #cfg button{padding:5px 9px;font-size:13px;margin:0 4px 4px 0}
 #cfg input[type=range]{width:100%}
+.muted2{color:#8b95ab;font-size:11px}
 .L{color:#ff9f1c}.S{color:#2ec4ff}.src-cg{color:#FFD60A}.src-es{color:#7fb0ff}.err{color:#ef5350}.rt{color:#26a69a}
 .price-live{color:#26a69a;font-weight:700}.price-offline{color:#ef5350;font-weight:700}
 </style>
@@ -44,6 +45,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
   <button id="bZones" class="tg on">Zonas</button>
   <button id="bProf" class="tg on">Perfil</button>
   <button id="bLiq" class="tg on">Liq</button>
+  <button id="bBook" class="tg">Libro</button>
   <button id="bVal">✓ Validez</button>
   <button id="bCfg">⚙</button>
   <div id="st">cargando…</div>
@@ -53,6 +55,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
   <div id="val"></div>
   <div id="hdr"></div><div id="zones"></div>
   <div id="cfg">
+    <div class="row"><div class="lbl">Vista</div><div id="cView"></div></div>
     <div class="row"><div class="lbl">Modelo</div><div id="cModel"></div></div>
     <div class="row"><div class="lbl">Apalancamientos</div><div id="cLev"></div></div>
     <div class="row"><div class="lbl">Paleta</div><div id="cPal"></div></div>
@@ -64,14 +67,20 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 <script>
 const K = new URLSearchParams(location.search).get('k');
 const TFS = { '5m': 300, '15m': 900, '1h': 3600, '4h': 14400 };
-const ALL = [10, 25, 50, 100];
-const TIER_COL = { 10: '#4f8cff', 25: '#2bd96b', 50: '#ffd60a', 100: '#ff4d4d' };
-const MODEL_NAME = { oi: 'Open Interest', vol: 'Volumen', cg: 'Coinglass' };
+const ALL = [5, 10, 25, 50, 100];
+const TIER_COL = { 5: '#a78bfa', 10: '#4f8cff', 25: '#2bd96b', 50: '#ffd60a', 100: '#ff4d4d' };
+const MODEL_NAME = { auto: 'Auto (calibrado)', oi: 'Open Interest', vol: 'Volumen', cg: 'Coinglass' };
 const WARM = [[0, 0, 110], [0, 150, 150], [0, 200, 0], [240, 240, 0], [255, 0, 0]];
 const COOL = [[123, 44, 191], [45, 108, 223], [255, 214, 10]];
 
-let cfg = { model: 'oi', levs: [10, 25, 50, 100], palette: 'warm', minPct: 4 };
-try { Object.assign(cfg, JSON.parse(localStorage.getItem('liq_cfg') || '{}')); } catch (e) {}
+const CFG_VER = 6;
+let cfg = { ver: CFG_VER, model: 'auto', levs: [5, 10, 25, 50, 100], palette: 'warm', minPct: 4, view: 'clean', book: false };
+try {
+  const saved = JSON.parse(localStorage.getItem('liq_cfg') || '{}');
+  // ajustes de versiones antiguas: se conserva solo la paleta y el mínimo
+  if (saved.ver === CFG_VER) Object.assign(cfg, saved);
+  else { if (saved.palette) cfg.palette = saved.palette; if (saved.minPct !== undefined) cfg.minPct = saved.minPct; }
+} catch (e) {}
 function saveCfg() { try { localStorage.setItem('liq_cfg', JSON.stringify(cfg)); } catch (e) {} }
 
 const bar = document.getElementById('bar');
@@ -88,6 +97,7 @@ const bZones = document.getElementById('bZones');
 const bProf = document.getElementById('bProf');
 const bCfg = document.getElementById('bCfg');
 const bLiq = document.getElementById('bLiq');
+const bBook = document.getElementById('bBook');
 const bVal = document.getElementById('bVal');
 const valEl = document.getElementById('val');
 const fx = document.getElementById('fx');
@@ -96,7 +106,7 @@ let tf = '5m', data = null, first = true, sideMode = false, showAsia = true, sho
 let lines = [], lastSig = '', version = 0;
 // Precio real recibido desde Binance (WebSocket)
 let livePrice = null, previousLivePrice = null, ws = null, wsRetry = null, priceLine = null, lastLiveUi = 0;
-let wsLive = false, liveBar = null, showLiq = true, valTimer = null;
+let wsLive = false, liveBar = null, showLiq = true, valTimer = null, zoneLines = [], tindex = {};
 
 // Hora local del dispositivo (la misma que muestra la app de Binance); los datos siguen en UTC.
 function fmtLocalFull(t) {
@@ -124,9 +134,20 @@ const series = chart.addCandlestickSeries({
 });
 
 // Línea de precio REAL: se crea con el primer precio conocido (nunca en 0)
+function countdown() {
+  if (!liveBar) return '';
+  const left = Math.max(0, Math.floor(liveBar.time + TFS[tf] - Date.now() / 1000));
+  const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
+  const mm = String(m).padStart(2, '0'), ss = String(s).padStart(2, '0');
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
 function setPriceLine(price, color) {
-  if (!priceLine) priceLine = series.createPriceLine({ price, color: color || '#26a69a', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'BTC REAL' });
-  else priceLine.applyOptions(color ? { price, color } : { price });
+  const title = 'BTC ' + countdown();
+  if (!priceLine) priceLine = series.createPriceLine({ price, color: color || '#26a69a', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title });
+  else priceLine.applyOptions(color ? { price, color, title } : { price, title });
+}
+function tickCountdown() {
+  if (priceLine && liveBar) priceLine.applyOptions({ title: 'BTC ' + countdown() });
 }
 
 function layout() { wrap.style.top = bar.offsetHeight + 'px'; }
@@ -158,7 +179,7 @@ function signature() {
   return [wrap.clientWidth, wrap.clientHeight,
     series.priceToCoordinate(data.price), series.priceToCoordinate(data.price * 1.01),
     ts.timeToCoordinate(cs[0].time), ts.timeToCoordinate(cs[cs.length - 1].time),
-    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.palette, cfg.minPct, version].join('|');
+    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.palette, cfg.minPct, cfg.view, cfg.book, version].join('|');
 }
 
 function drawTime(w) {
@@ -168,9 +189,17 @@ function drawTime(w) {
   const xLast = ts.timeToCoordinate(lastT);
   const half = data.heat.size / 2;
   const max = data.heat.max;
+  const clean = cfg.view === 'clean';
+  if (clean && data.heat.bands) { drawBands(w, ts, bs, xLast); return; }
   const minR = Math.max(0.005, cfg.minPct / 100);
+  const FF = data.heat.F || {}, FL = FF.L, FS = FF.S;
   if (!(max > 0) || xLast === null) return;
-  for (const [p, t0, t1, L, S] of data.heat.segments) {
+  for (const [p, t0, t1, mL, mS] of data.heat.segments) {
+    if (clean && t1 < lastT) continue;   // vista limpia: solo lo que sigue vivo
+    const j = tindex[t1];
+    const L = FL && j !== undefined ? mL * FL[j] : mL;
+    const S = FS && j !== undefined ? mS * FS[j] : mS;
+    if (L + S <= 0) continue;
     const ratio = Math.min(1, (L + S) / max);
     if (ratio < minR) continue;
     const y1 = series.priceToCoordinate(p + half);
@@ -183,6 +212,35 @@ function drawTime(w) {
     const xs = Math.max(0, x1);
     ctx.fillStyle = fillFor(ratio, L / (L + S));
     ctx.fillRect(xs, y1, x2 - xs, Math.max(1, y2 - y1));
+  }
+}
+
+function drawBands(w, ts, bs, xLast) {
+  const bands = data.heat.bands;
+  if (!bands.length || xLast === null) return;
+  const top = bands[0].total;
+  const minR = Math.max(0.12, cfg.minPct / 100);
+  // de la más débil a la más fuerte, para que las fuertes queden encima
+  for (const b of bands.slice().reverse()) {
+    const ratio = b.total / top;
+    if (ratio < minR) continue;
+    const y1 = series.priceToCoordinate(b.hi);
+    const y2 = series.priceToCoordinate(b.lo);
+    if (y1 === null || y2 === null) continue;
+    let x1 = ts.timeToCoordinate(b.t0 - (b.t0 % TFS[tf]));
+    if (x1 === null) x1 = 0;
+    x1 = Math.max(0, x1 - bs / 2);
+    const x2 = xLast + bs / 2;
+    if (x2 <= x1) continue;
+    const hgt = Math.max(2, y2 - y1);
+    ctx.fillStyle = fillFor(ratio, b.L / (b.L + b.S));
+    ctx.fillRect(x1, y1, x2 - x1, hgt);
+    // filo brillante en el precio central de la banda
+    const yc = series.priceToCoordinate(b.price);
+    if (yc !== null && ratio >= 0.35) {
+      ctx.fillStyle = sideMode ? (b.L >= b.S ? '#ffb347' : '#6fd8ff') : 'rgba(255,255,255,0.55)';
+      ctx.fillRect(x1, yc - 0.5, x2 - x1, 1);
+    }
   }
 }
 
@@ -237,6 +295,33 @@ function drawProfile(w) {
   }
 }
 
+function drawBook(w, h) {
+  const bk = data.book;
+  if (!cfg.book || !bk || bk.error) return;
+  const ts = chart.timeScale();
+  const xLast = ts.timeToCoordinate(data.candles[data.candles.length - 1].time);
+  if (xLast === null) return;
+  const ps = chart.priceScale('right');
+  const pw = (ps && ps.width && ps.width()) || 70;
+  const x2 = w - pw - (showProf ? profWidth(w) : 0) - 6;
+  const x1 = Math.max(0, Math.min(xLast + 8, x2 - 90));   // siempre al menos 90 px visibles
+  const all = (bk.bids || []).map(b => [b[0], b[1], 'compra']).concat((bk.asks || []).map(a => [a[0], a[1], 'venta']));
+  let mx = 0;
+  for (const it of all) mx = Math.max(mx, it[1]);
+  fctx.font = '10px system-ui, sans-serif';
+  for (const [p, usd, kind] of all) {
+    const y = series.priceToCoordinate(p);
+    if (y === null || y < 0 || y > h) continue;
+    const col = kind === 'compra' ? '#9be9a8' : '#ff9bb3';
+    fctx.strokeStyle = col; fctx.fillStyle = col;
+    fctx.lineWidth = 1 + 2 * (usd / mx);
+    fctx.setLineDash([4, 3]);
+    fctx.beginPath(); fctx.moveTo(x1, y); fctx.lineTo(x2, y); fctx.stroke();
+    fctx.setLineDash([]);
+    fctx.fillText(`${kind} ${fmtM(usd)}`, x1 + 2, y - 3);
+  }
+}
+
 function drawLiqs(w, h) {
   if (!showLiq || !data.liqs || !data.liqs.items || !data.liqs.items.length) return;
   const ts = chart.timeScale();
@@ -277,6 +362,7 @@ function render() {
   fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   fctx.clearRect(0, 0, w, h);
   drawLiqs(w, h);
+  drawBook(w, h);
 }
 
 function fmt(x) { return Math.round(x).toLocaleString('es-ES'); }
@@ -286,7 +372,8 @@ function fmtM(x) { return x >= 1e9 ? (x / 1e9).toFixed(2) + 'B' : x >= 1e6 ? (x 
 function updateHeader() {
   if (!data) { hdr.textContent = ''; return; }
   const min = (cfg.minPct / 100) * data.heat.max;
-  const parts = ['BINANCE:' + data.symbol + '.P (perpetuo)', tf + ' · hora local', MODEL_NAME[data.model] || data.model];
+  const mname = data.model === 'auto' ? (data.calib && data.calib.params ? 'Auto (calibrado)' : 'Auto (sin calibrar aún)') : (MODEL_NAME[data.model] || data.model);
+  const parts = ['BINANCE:' + data.symbol + '.P (perpetuo)', tf + ' · hora local', mname];
   if (data.model !== 'cg') parts.push('Pools ' + data.levs.map(l => l + 'X').join('+'));
   parts.push('Total ≥ ' + fmtM(min), 'maxHeat ' + fmtM(data.heat.max));
   hdr.textContent = parts.join(' · ');
@@ -300,9 +387,34 @@ function updateZones() {
     const dots = z.ratio > 0.75 ? '●●●' : z.ratio > 0.45 ? '●●' : '●';
     const cls = z.side === 'long' ? 'L' : 'S';
     const lado = z.side === 'long' ? 'largos' : 'cortos';
-    return `<div class="${cls}">${fmt(z.price)} · ${d >= 0 ? '+' : '−'}${fmt(Math.abs(d))} pts · ${lado} ${dots}</div>`;
+    return `<div class="${cls}">${fmt(z.price)} · ${d >= 0 ? '+' : '−'}${fmt(Math.abs(d))} pts · ${lado} ≈${fmtM(z.total)} ${dots}</div>`;
   });
   zonesEl.innerHTML = rows.join('');
+}
+
+function updateZoneLines() {
+  zoneLines.forEach(l => series.removePriceLine(l));
+  zoneLines = [];
+  if (!data || cfg.view !== 'clean' || !showZones || data.heat.mode !== 'time') return;
+  const px = livePrice ?? data.price;
+  const bands = (data.heat.bands && data.heat.bands.length) ? data.heat.bands
+    : data.zones.map(z => ({ price: z.price, total: z.total, L: z.side === 'long' ? 1 : 0, S: z.side === 'long' ? 0 : 1 }));
+  if (!bands.length) return;
+  const top = Math.max(...bands.map(b => b.total));
+  const strong = bands.filter(b => b.total / top >= 0.3);
+  const above = strong.filter(b => b.price > px).sort((a, b) => a.price - b.price)[0];
+  const below = strong.filter(b => b.price < px).sort((a, b) => b.price - a.price)[0];
+  const biggest = bands.reduce((m, b) => (b.total > m.total ? b : m), bands[0]);
+  const picked = [];
+  for (const b of [above, below, biggest]) if (b && !picked.includes(b)) picked.push(b);
+  for (const b of picked) {
+    const long = b.L >= b.S;
+    const d = b.price - px;
+    zoneLines.push(series.createPriceLine({
+      price: b.price, color: long ? '#ff9f1c' : '#2ec4ff', lineWidth: 1, lineStyle: 1, axisLabelVisible: true,
+      title: `${long ? 'largos' : 'cortos'} ≈${fmtM(b.total)} · ${d >= 0 ? '+' : '−'}${fmt(Math.abs(d))} pts`
+    }));
+  }
 }
 
 function updateAsia() {
@@ -329,7 +441,9 @@ function updateStatus() {
   const current = livePrice ?? data.price;
   const liveClass = wsLive ? 'price-live' : 'price-offline';
   st.innerHTML = `<span class="${cls}">${data.source}</span> (${data.used.join('+')}) · ${hora}<br>` +
-    `<span class="${liveClass}">${fmtLive(current)}</span><br>` +
+    `<span class="${liveClass}">${fmtLive(current)}</span>` +
+    (data.ctx && data.ctx.chg24 !== undefined ? ` <span class="${data.ctx.chg24 >= 0 ? 'rt' : 'err'}">${data.ctx.chg24 >= 0 ? '+' : ''}${data.ctx.chg24.toFixed(2).replace('.', ',')}% 24h</span>` : '') +
+    (data.ctx && data.ctx.mark ? `<br><span class="muted2">marca ${fmtLive(data.ctx.mark)}</span>` : '') + '<br>' +
     (wsLive ? '<span class="rt">● LIVE</span>' : '<span class="err">● OFFLINE</span>') +
     (data.note ? `<br><span class="err">${String(data.note).slice(0, 70)}</span>` : '');
 }
@@ -437,7 +551,8 @@ async function load() {
       first = false;
     }
     version++;
-    updateAsia(); updateZones(); updateStatus(); updateHeader(); buildCfg();
+    tindex = {}; d.candles.forEach((c, i) => { tindex[c.time] = i; });
+    updateAsia(); updateZones(); updateZoneLines(); updateStatus(); updateHeader(); buildCfg();
     if (valEl.style.display === 'block' && first === false && valEl.dataset.tf !== tf) { valEl.dataset.tf = tf; loadVal(); }
     // reconectar el WebSocket si se cayó o cambió el símbolo
     if (!ws || ws.readyState > 1) connectBinance();   // solo si está cerrado o cerrándose
@@ -455,11 +570,20 @@ function chip(label, on, fn) {
   return b;
 }
 function buildCfg() {
-  const models = (data && data.models) || ['oi', 'vol'];
+  const cv2 = document.getElementById('cView'); cv2.innerHTML = '';
+  [['clean', 'Limpia'], ['full', 'Completa']].forEach(([v, t]) => cv2.appendChild(chip(t, cfg.view === v, () => {
+    cfg.view = v; saveCfg(); version++; updateZoneLines(); buildCfg();
+  })));
+  const models = (data && data.models) || ['auto', 'oi', 'vol'];
   const cm = document.getElementById('cModel'); cm.innerHTML = '';
   models.forEach(m => cm.appendChild(chip(MODEL_NAME[m], cfg.model === m, () => { cfg.model = m; saveCfg(); data = null; lastSig = ''; load(); })));
   const cl = document.getElementById('cLev'); cl.innerHTML = '';
-  ALL.forEach(l => cl.appendChild(chip(l + 'x', cfg.levs.includes(l), () => {
+  if (cfg.model === 'auto') {
+    const d0 = document.createElement('div');
+    d0.className = 'muted2';
+    d0.textContent = data && data.levs && data.levs.length ? `Elegidos solos: ${data.levs.join('x · ')}x` : 'Los elige la calibración';
+    cl.appendChild(d0);
+  } else ALL.forEach(l => cl.appendChild(chip(l + 'x', cfg.levs.includes(l), () => {
     const next = cfg.levs.includes(l) ? cfg.levs.filter(x => x !== l) : cfg.levs.concat(l).sort((a, b) => a - b);
     if (!next.length) return;
     cfg.levs = next; saveCfg(); data = null; lastSig = ''; load();
@@ -482,7 +606,7 @@ bCfg.onclick = () => {
 };
 
 // ───── validez: comparación con liquidaciones reales
-const MODEL_LABEL = { oi: 'Open Interest', vol: 'Volumen' };
+const MODEL_LABEL = { auto: 'Auto (calibrado)', oi: 'Open Interest (tus ajustes)', vol: 'Volumen' };
 function pct(x) { return x === null || x === undefined ? '–' : Math.round(x * 100) + '%'; }
 function times(x) { return x === null || x === undefined ? '–' : x.toFixed(1).replace('.', ',') + '×'; }
 function verdict(lift) {
@@ -509,6 +633,17 @@ function renderVal(v) {
       <div class="muted">${r.events} liquidaciones · ${fmtM(r.usd || 0)} USD · ${r.touches} zonas tocadas · margen ±${r.tol_points} pts</div>`);
   }
   if (best && anyM && anyM.enough) parts.push(`<div style="margin-top:6px">Ahora acierta más: <b>${MODEL_LABEL[best[0]]}</b></div>`);
+  const cb = v.calib;
+  if (cb && cb.status === 'ok') {
+    const p = cb.params;
+    parts.push(`<h4>Calibración automática</h4>
+      <div>Mejor de ${cb.tested} combinaciones probadas con ${cb.events} liquidaciones reales (${String(cb.hours).replace('.', ',')} h):</div>
+      <div><b>${p.tiers.join('x · ')}x</b> · vida media <b>${p.half_life_h ? p.half_life_h + ' h' : 'sin'}</b> · filtro de picos <b>${p.spike_z ? 'sí' : 'no'}</b></div>
+      <div>Puntuación ${times(cb.score)} <span class="muted">(la configuración por defecto: ${times(cb.default_score)})</span></div>
+      <div class="muted">Se repite cada 3 h. Con pocas liquidaciones el resultado puede cambiar.</div>`);
+  } else if (cb) {
+    parts.push(`<h4>Calibración automática</h4><div class="warn">Pendiente: ${cb.events || 0}/100 liquidaciones y ${String(cb.hours || 0).replace('.', ',')}/24 h.</div>`);
+  }
   const c = (data && data.ctx) || {};
   const lq = (data && data.liqs) || {};
   parts.push(`<h4>Contexto del mercado</h4>
@@ -549,6 +684,8 @@ bVal.onclick = () => {
   valTimer = setInterval(loadVal, 300000);
 };
 bLiq.onclick = () => { showLiq = !showLiq; bLiq.classList.toggle('on', showLiq); };
+bBook.classList.toggle('on', !!cfg.book);
+bBook.onclick = () => { cfg.book = !cfg.book; saveCfg(); bBook.classList.toggle('on', cfg.book); version++; };
 
 document.querySelectorAll('button[data-tf]').forEach(btn => {
   btn.onclick = () => {
@@ -567,7 +704,7 @@ bMode.onclick = () => {
   version++;
 };
 bAsia.onclick = () => { showAsia = !showAsia; bAsia.classList.toggle('on', showAsia); if (data) updateAsia(); };
-bZones.onclick = () => { showZones = !showZones; bZones.classList.toggle('on', showZones); updateZones(); };
+bZones.onclick = () => { showZones = !showZones; bZones.classList.toggle('on', showZones); updateZones(); updateZoneLines(); };
 bProf.onclick = () => { showProf = !showProf; bProf.classList.toggle('on', showProf); };
 
 window.addEventListener('resize', layout);
@@ -576,6 +713,7 @@ buildCfg();
 requestAnimationFrame(render);
 load();
 setInterval(load, 60000);
+setInterval(tickCountdown, 1000);
 </script>
 </body>
 </html>

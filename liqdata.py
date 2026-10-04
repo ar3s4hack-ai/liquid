@@ -58,6 +58,7 @@ def _conn():
         _db.execute("CREATE TABLE IF NOT EXISTS liq(ts INTEGER, ex TEXT, side INTEGER, price REAL, mkt REAL, qty REAL, usd REAL)")
         _db.execute("CREATE INDEX IF NOT EXISTS liq_ts ON liq(ts)")
         _db.execute("CREATE TABLE IF NOT EXISTS hb(ts INTEGER PRIMARY KEY)")
+        _db.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
         _db.commit()
     return _db
 
@@ -73,7 +74,8 @@ def save_events(evs):
         )
         c.commit()
     for e in evs:
-        STATUS[e["ex"]]["events"] += 1
+        if e["ex"] in STATUS:
+            STATUS[e["ex"]]["events"] += 1
 
 
 def heartbeat(now=None):
@@ -107,6 +109,19 @@ def covered_minutes(t0, t1):
     with _db_lock:
         rows = _conn().execute("SELECT ts FROM hb WHERE ts >= ? AND ts < ?", (int(t0), int(t1))).fetchall()
     return {r[0] for r in rows}
+
+
+def meta_set(k, value):
+    with _db_lock:
+        c = _conn()
+        c.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (k, json.dumps(value)))
+        c.commit()
+
+
+def meta_get(k, default=None):
+    with _db_lock:
+        row = _conn().execute("SELECT v FROM meta WHERE k = ?", (k,)).fetchone()
+    return json.loads(row[0]) if row else default
 
 
 def db_counts():
@@ -372,12 +387,23 @@ def validate(candles, step, heat, touches, events, covered, min_ratio=0.1, tol_p
     by_bin = defaultdict(list)
     for p, t0, t1, L, S in heat["segments"]:
         by_bin[math.floor(p / size)].append((t0, t1, L, S))
+    tidx = {c["time"]: i for i, c in enumerate(candles)}
+    FF = heat.get("F") or {}
+    FL, FS = FF.get("L"), FF.get("S")
+
+    def factor(side, tc):
+        arr = FL if side == 1 else FS
+        if not arr:
+            return 1.0
+        j = tidx.get(tc, 0) - 1
+        return arr[max(0, j)]
 
     def active(tc, side, lo, hi):
         found = set()
+        f = factor(side, tc)
         for b in range(lo, hi + 1):
             for t0, t1, L, S in by_bin.get(b, ()):
-                v = L if side == 1 else S
+                v = (L if side == 1 else S) * f
                 if t0 < tc <= t1 and v >= thr:
                     found.add(b)
                     break

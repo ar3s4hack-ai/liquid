@@ -51,3 +51,20 @@ VAL_TTL             segundos de caché de la validación (300)
 - Mercado: Binance Futuros, BTCUSDT perpetuo (el mismo que en la app de Binance → Futuros USDⓈ-M).
 - Hora: la del dispositivo de cada persona (como la app de Binance). Los datos internos siguen en UTC.
 - Tiempo real: velas oficiales de Binance (kline), precio tick a tick (aggTrade) y liquidaciones de Binance al instante.
+
+## v6: modelo mejorado, autocalibración y vista limpia
+Modelo (basado en cómo lo hacen Hyblock, Coinglass y otros):
+- OI sube: entran largos y cortos por la misma cantidad (cada contrato tiene las dos partes).
+- OI baja: se cierran posiciones (vela alcista: cortos; vela bajista: largos).
+- Entrada al precio típico de la vela (máx + mín + cierre) / 3.
+- Envejecimiento (vida media en horas) y filtro de picos de OI opcionales.
+- Apalancamientos 5x, 10x, 25x, 50x y 100x.
+Autocalibración: cada 3 h prueba 18 combinaciones contra las liquidaciones reales guardadas y el modelo
+«Auto» usa la mejor. Puntúa acierto y confirmación frente al azar. Necesita 100 liquidaciones y 24 h.
+Vista limpia: bandas agrupadas y rótulos de la zona fuerte más cercana por encima, por debajo y la mayor.
+Libro: muros reales del libro de órdenes de Binance Futuros (capa aparte, no son liquidaciones).
+Precio: cuenta atrás de cierre de vela, precio de marca y variación 24 h. Respuestas comprimidas (gzip).
+
+CALIB_MIN_EVENTS    liquidaciones mínimas para calibrar (100)
+CALIB_MIN_HOURS     horas mínimas escuchando para calibrar (24)
+/api/calibrate      fuerza una calibración (máximo una cada 10 minutos)
