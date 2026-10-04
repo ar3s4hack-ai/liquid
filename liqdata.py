@@ -26,6 +26,8 @@ OKX_INST = os.getenv("OKX_INST", "BTC-USDT-SWAP")
 DATA_DIR = os.getenv("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 RETENTION_DAYS = int(os.getenv("LIQ_RETENTION_DAYS", "30"))
 LIQ_MIN_USD = float(os.getenv("LIQ_MIN_USD", "5000"))
+# Binance separó sus WebSocket de futuros en 2026: liquidaciones, precio de marca, velas y operaciones van por /market
+BINANCE_WS = os.getenv("BINANCE_WS", "wss://fstream.binance.com/market")
 
 EXCHANGES = ("binance", "bybit", "okx")
 STATUS = {ex: {"connected": False, "last_msg": 0, "events": 0, "error": None, "since": None} for ex in EXCHANGES}
@@ -294,7 +296,7 @@ def start():
     _started = True
     _okx_ct_val()
     sym = SYMBOL.lower()
-    WSCollector("binance", f"wss://fstream.binance.com/stream?streams={sym}@forceOrder/{sym}@markPrice@1s",
+    WSCollector("binance", f"{BINANCE_WS}/stream?streams={sym}@forceOrder/{sym}@markPrice@1s",
                 parse_binance).start()
     WSCollector("bybit", "wss://stream.bybit.com/v5/public/linear", parse_bybit,
                 subscribe={"op": "subscribe", "args": [f"allLiquidation.{SYMBOL}"]},
@@ -309,8 +311,12 @@ def status():
     now = int(time.time())
     out = {}
     for ex, s in STATUS.items():
+        receiving = bool(s["last_msg"]) and now - s["last_msg"] < 180
+        just_opened = not s["last_msg"] and s["since"] is not None and now - s["since"] < 30
         out[ex] = {
-            "connected": s["connected"] and now - (s["last_msg"] or s["since"] or 0) < 180,
+            # conectado = está llegando información (no basta con abrir la conexión)
+            "connected": s["connected"] and (receiving or just_opened),
+            "receiving": receiving,
             "events": s["events"],
             "last_msg_ago": (now - s["last_msg"]) if s["last_msg"] else None,
             "error": s["error"],

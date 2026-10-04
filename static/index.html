@@ -390,7 +390,8 @@ function connectBinance() {
   if (wsRetry) { clearTimeout(wsRetry); wsRetry = null; }
   wsLive = false;
   const sym = String((data && data.symbol) || 'BTCUSDT').toLowerCase();
-  const url = `wss://fstream.binance.com/stream?streams=${sym}@aggTrade/${sym}@kline_${tf}/${sym}@forceOrder`;
+  // Binance (2026): operaciones, velas y liquidaciones van por la ruta /market
+  const url = `wss://fstream.binance.com/market/stream?streams=${sym}@aggTrade/${sym}@kline_${tf}/${sym}@forceOrder`;
   let sock;
   try { sock = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
   ws = sock;
