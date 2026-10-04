@@ -76,3 +76,11 @@ CALIB_MIN_HOURS     horas mínimas escuchando para calibrar (24)
 - Perfil grande a la derecha apilado por apalancamiento: verde 25x, amarillo 50x, rojo 100x.
 - Línea de precio roja punteada. Barra superior mínima: el resto de capas está en ⚙ → Capas.
 - Vistas «Limpia» y «Completa» siguen disponibles en ⚙ → Vista.
+
+## v8: barra de Pools, curvas acumuladas, fondo teñido e intensidad (como Trading Different)
+- Barra «Pools: 10X 25X 50X 100X · Total»: al pasar el cursor muestra el valor de cada pool en ese precio
+  y «Si llega aquí: ≈$X» (lo que se liquidaría acumulado desde el precio actual hasta el cursor).
+  Marcar/desmarcar pools cambia al modelo Open Interest con esos apalancamientos; «Auto» vuelve al calibrado.
+- Curvas acumuladas en el perfil: roja = cortos por encima del precio, verde = largos por debajo.
+- Fondo teñido en la zona futura: rojizo por encima del precio, verdoso por debajo.
+- Deslizador de intensidad del color (escala de maxHeat).

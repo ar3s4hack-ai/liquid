@@ -11,6 +11,15 @@ button{background:#1a2030;color:#cfd6e4;border:1px solid #2b3550;border-radius:6
 button:hover{background:#222a3d}
 button.on{background:#2D6CDF;border-color:#2D6CDF;color:#fff}
 button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
+#pools{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;font-size:12px;color:#cfd6e4;padding-top:2px}
+#pools label{display:inline-flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap}
+#pools input[type=checkbox]{accent-color:#2D6CDF;margin:0}
+#pools .pv{color:#9aa4b8;min-width:38px}
+#pools .tot{font-weight:600}
+#pools .cum{color:#9aa4b8}
+#pools input[type=range]{width:90px;accent-color:#f0e60a}
+#pools .grad{width:44px;height:8px;border-radius:3px;background:linear-gradient(90deg,#008f8f,#0fbf0f,#f0e60a,#e8100a)}
+#pools button{padding:2px 8px;font-size:12px}
 #st{margin-left:auto;font-size:11px;text-align:right;line-height:1.3;min-width:150px}
 #wrap{position:absolute;left:0;right:0;bottom:0;top:90px}
 #heat,#chart{position:absolute;inset:0;width:100%;height:100%}
@@ -43,6 +52,17 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
   <button id="bVal">✓ Validez</button>
   <button id="bCfg">⚙</button>
   <div id="st">cargando…</div>
+  <div id="pools">
+    <span>Pools:</span>
+    <label><input type="checkbox" data-pool="10">10X: <span class="pv" data-pv="10">–</span></label>
+    <label><input type="checkbox" data-pool="25">25X: <span class="pv" data-pv="25">–</span></label>
+    <label><input type="checkbox" data-pool="50">50X: <span class="pv" data-pv="50">–</span></label>
+    <label><input type="checkbox" data-pool="100">100X: <span class="pv" data-pv="100">–</span></label>
+    <span class="tot">Total: <span id="pTot">–</span></span>
+    <span class="cum" id="pCum"></span>
+    <button id="bAuto" class="tg">Auto</button>
+    <span class="grad"></span><input type="range" id="pInt" min="0.3" max="3" step="0.1" title="Intensidad del color">
+  </div>
 </div>
 <div id="wrap">
   <canvas id="heat"></canvas><div id="chart"></div><canvas id="fx"></canvas>
@@ -73,7 +93,7 @@ const WARM = [[0, 0, 110], [0, 150, 150], [0, 200, 0], [240, 240, 0], [255, 0, 0
 const COOL = [[123, 44, 191], [45, 108, 223], [255, 214, 10]];
 
 const CFG_VER = 7;
-let cfg = { ver: CFG_VER, model: 'auto', levs: [25, 50, 100], palette: 'warm', minPct: 24, view: 'pro', book: false };
+let cfg = { ver: CFG_VER, model: 'auto', levs: [25, 50, 100], palette: 'warm', minPct: 24, view: 'pro', book: false, intensity: 1 };
 try {
   const saved = JSON.parse(localStorage.getItem('liq_cfg') || '{}');
   // ajustes de versiones antiguas: se conserva solo la paleta y el mínimo
@@ -180,7 +200,7 @@ function signature() {
   return [wrap.clientWidth, wrap.clientHeight,
     series.priceToCoordinate(data.price), series.priceToCoordinate(data.price * 1.01),
     ts.timeToCoordinate(cs[0].time), ts.timeToCoordinate(cs[cs.length - 1].time),
-    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.palette, cfg.minPct, cfg.view, cfg.book, version].join('|');
+    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.palette, cfg.minPct, cfg.view, cfg.book, cfg.intensity, version].join('|');
 }
 
 function drawTime(w) {
@@ -191,7 +211,7 @@ function drawTime(w) {
   const half = data.heat.size / 2;
   const clean = cfg.view === 'clean';
   const pro = cfg.view === 'pro';
-  const max = pro && data.heat.max_abs ? data.heat.max_abs : data.heat.max;
+  const max = pro ? proMax() : data.heat.max;
   if (clean && data.heat.bands) { drawBands(w, ts, bs, xLast); return; }
   const minR = Math.max(0.005, cfg.minPct / 100);
   const FF = data.heat.F || {}, FL = FF.L, FS = FF.S;
@@ -291,6 +311,11 @@ function smoothActive(act, size) {
   });
 }
 
+function proMax() {
+  const m = data.heat.max_abs || data.heat.max || 0;
+  return m / Math.max(0.1, cfg.intensity || 1);
+}
+
 function drawProfile(w) {
   const act = cfg.view === 'pro' ? (data.profAct || data.heat.active) : data.heat.active;
   if (!showProf || !act || !act.length) return;
@@ -324,6 +349,58 @@ function drawProfile(w) {
       }
     }
   }
+  drawCumulative(xr, maxLen);
+}
+
+function cumulativeSides() {
+  // cortos por encima del precio (se liquidan si sube) y largos por debajo (si baja), acumulados desde el precio
+  const px = livePrice ?? data.price;
+  const act = data.heat.active || [];
+  const up = act.filter(a => a[0] > px).sort((a, b) => a[0] - b[0]);
+  const dn = act.filter(a => a[0] < px).sort((a, b) => b[0] - a[0]);
+  let c = 0;
+  const upC = up.map(a => [a[0], (c += a[2])]);
+  c = 0;
+  const dnC = dn.map(a => [a[0], (c += a[1])]);
+  return { px, upC, dnC };
+}
+
+function drawCumulative(xr, maxLen) {
+  if (cfg.view !== 'pro') return;
+  const { upC, dnC } = cumulativeSides();
+  const top = Math.max(upC.length ? upC[upC.length - 1][1] : 0, dnC.length ? dnC[dnC.length - 1][1] : 0);
+  if (!(top > 0)) return;
+  for (const [arr, col] of [[upC, '#ff5a5a'], [dnC, '#3ddc84']]) {
+    if (!arr.length) continue;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    let started = false;
+    for (const [p, cv] of arr) {
+      const y = series.priceToCoordinate(p);
+      if (y === null) continue;
+      const x = xr - (cv / top) * maxLen;
+      if (!started) { ctx.moveTo(xr, y); started = true; }
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawFutureTint(w, h) {
+  if (cfg.view !== 'pro') return;
+  const ts = chart.timeScale();
+  const xLast = ts.timeToCoordinate(data.candles[data.candles.length - 1].time);
+  const yP = series.priceToCoordinate(livePrice ?? data.price);
+  if (xLast === null || yP === null) return;
+  const ps = chart.priceScale('right');
+  const pw = (ps && ps.width && ps.width()) || 70;
+  const x1 = xLast + ts.options().barSpacing, x2 = w - pw;
+  if (x2 <= x1) return;
+  ctx.fillStyle = 'rgba(140,20,20,0.16)';
+  ctx.fillRect(x1, 0, x2 - x1, Math.max(0, yP));
+  ctx.fillStyle = 'rgba(20,120,45,0.13)';
+  ctx.fillRect(x1, yP, x2 - x1, Math.max(0, h - yP));
 }
 
 function drawBook(w, h) {
@@ -387,6 +464,7 @@ function render() {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  drawFutureTint(w, h);
   if (data.heat.mode === 'time') drawTime(w); else drawStatic(w);
   drawProfile(w);
   if (fx.width !== cv.width || fx.height !== cv.height) { fx.width = cv.width; fx.height = cv.height; }
@@ -404,7 +482,7 @@ function updateHeader() {
   if (!data) { hdr.textContent = ''; return; }
   const min = (cfg.minPct / 100) * data.heat.max;
   if (cfg.view === 'pro' && data.heat.mode === 'time') {
-    const mxp = data.heat.max_abs || data.heat.max;
+    const mxp = proMax();
     hdr.textContent = `BINANCE:${data.symbol} · ${tf} · Pools ${data.levs.map(l => l + 'X').join('+')} · Total ≥ ${fmtM((cfg.minPct / 100) * mxp)} · maxHeat ${fmtM(mxp)}`;
     return;
   }
@@ -589,7 +667,7 @@ async function load() {
     version++;
     tindex = {}; d.candles.forEach((c, i) => { tindex[c.time] = i; });
     if (d.heat && d.heat.active) d.profAct = smoothActive(d.heat.active, d.heat.size);
-    updateAsia(); updateZones(); updateZoneLines(); updateStatus(); updateHeader(); buildCfg();
+    updateAsia(); updateZones(); updateZoneLines(); updateStatus(); updateHeader(); buildCfg(); syncPools();
     if (valEl.style.display === 'block' && first === false && valEl.dataset.tf !== tf) { valEl.dataset.tf = tf; loadVal(); }
     // reconectar el WebSocket si se cayó o cambió el símbolo
     if (!ws || ws.readyState > 1) connectBinance();   // solo si está cerrado o cerrándose
@@ -745,6 +823,53 @@ bMode.onclick = () => {
 bAsia.onclick = () => { showAsia = !showAsia; bAsia.classList.toggle('on', showAsia); if (data) updateAsia(); };
 bZones.onclick = () => { showZones = !showZones; bZones.classList.toggle('on', showZones); updateZones(); updateZoneLines(); };
 bProf.onclick = () => { showProf = !showProf; bProf.classList.toggle('on', showProf); };
+
+const POOL_TIERS = [10, 25, 50, 100];
+function poolReadout(price) {
+  const pv = (t) => document.querySelector(`[data-pv="${t}"]`);
+  if (!data || !data.heat.active || price === null || price === undefined) {
+    POOL_TIERS.forEach(t => { pv(t).textContent = '–'; });
+    document.getElementById('pTot').textContent = '–';
+    document.getElementById('pCum').textContent = '';
+    return;
+  }
+  const size = data.heat.size;
+  const row = data.heat.active.find(a => Math.abs(a[0] - price) <= size / 2);
+  POOL_TIERS.forEach(t => {
+    const i = ALL.indexOf(t);
+    pv(t).textContent = row && row[3] ? fmtM(row[3][i] || 0) : '0';
+  });
+  document.getElementById('pTot').textContent = row ? fmtM(row[1] + row[2]) : '0';
+  const { px, upC, dnC } = cumulativeSides();
+  let cum = 0, side = '';
+  if (price > px) { for (const [p, c] of upC) { if (p <= price) cum = c; else break; } side = 'cortos'; }
+  else { for (const [p, c] of dnC) { if (p >= price) cum = c; else break; } side = 'largos'; }
+  document.getElementById('pCum').textContent = cum > 0 ? `Si llega aquí: ≈${fmtM(cum)} ${side}` : '';
+}
+chart.subscribeCrosshairMove((param) => {
+  if (!param || !param.point) { poolReadout(null); return; }
+  poolReadout(series.coordinateToPrice(param.point.y));
+});
+
+function syncPools() {
+  const auto = cfg.model === 'auto';
+  const levs = auto && data && data.levs ? data.levs : cfg.levs;
+  document.querySelectorAll('input[data-pool]').forEach(cb => { cb.checked = levs.includes(+cb.dataset.pool); });
+  document.getElementById('bAuto').classList.toggle('on', auto);
+  document.getElementById('pInt').value = cfg.intensity || 1;
+}
+document.querySelectorAll('input[data-pool]').forEach(cb => {
+  cb.onchange = () => {
+    // elegir pools a mano = modelo Open Interest con esos apalancamientos
+    const base = cfg.model === 'auto' && data && data.levs ? data.levs.slice() : cfg.levs.slice();
+    const t = +cb.dataset.pool;
+    const next = cb.checked ? Array.from(new Set(base.concat(t))).sort((a, b) => a - b) : base.filter(x => x !== t);
+    if (!next.length) { cb.checked = true; return; }
+    cfg.levs = next; cfg.model = 'oi'; saveCfg(); data = null; lastSig = ''; syncPools(); load();
+  };
+});
+document.getElementById('bAuto').onclick = () => { cfg.model = 'auto'; saveCfg(); data = null; lastSig = ''; syncPools(); load(); };
+document.getElementById('pInt').oninput = (e) => { cfg.intensity = +e.target.value; saveCfg(); version++; updateHeader(); };
 
 window.addEventListener('resize', layout);
 layout();
