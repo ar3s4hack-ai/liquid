@@ -68,3 +68,11 @@ Precio: cuenta atrás de cierre de vela, precio de marca y variación 24 h. Resp
 CALIB_MIN_EVENTS    liquidaciones mínimas para calibrar (100)
 CALIB_MIN_HOURS     horas mínimas escuchando para calibrar (24)
 /api/calibrate      fuerza una calibración (máximo una cada 10 minutos)
+
+## v7: vista Pro (por defecto), igual que el heatmap de referencia
+- Fondo negro: solo se pinta lo que supera el mínimo («Total ≥», 24% del máximo real «maxHeat»).
+- 4 colores fijos de menos a más: turquesa, verde, amarillo, rojo. Rayado fino por vela.
+- Tramos de 0,05% (unos 43 puntos) para bloques compactos. Pools 25X+50X+100X por defecto.
+- Perfil grande a la derecha apilado por apalancamiento: verde 25x, amarillo 50x, rojo 100x.
+- Línea de precio roja punteada. Barra superior mínima: el resto de capas está en ⚙ → Capas.
+- Vistas «Limpia» y «Completa» siguen disponibles en ⚙ → Vista.

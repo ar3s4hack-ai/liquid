@@ -271,7 +271,7 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
     """
     P = dict(DEFAULT_PARAMS)
     P.update(params or {})
-    size = price * BIN_PCT / 100
+    size = price * (P.get("bin_pct") or BIN_PCT) / 100
     lo, hi = price * (1 - RANGE_PCT / 100), price * (1 + RANGE_PCT / 100)
     n = len(candles)
     step = (candles[1]["time"] - candles[0]["time"]) if n > 1 else 300
@@ -410,11 +410,13 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
 
     totals = sorted(v for v in (seg_value(sg) for sg in segs) if v > 0)
     vmax = totals[min(len(totals) - 1, int(0.95 * (len(totals) - 1)))] if totals else 0
+    vmax_abs = totals[-1] if totals else 0
     zones = cluster_zones(active, price)
     heat = {
         "mode": "time",
         "size": size,
         "max": vmax,
+        "max_abs": vmax_abs,
         "segments": segs,
         "F": {"L": [round(x, 6) for x in FL], "S": [round(x, 6) for x in FS]},
         "active": [[p, round(L), round(S), t] for p, L, S, t in sorted(active) if L + S >= 1],
@@ -557,7 +559,7 @@ def calib_params():
     return None
 
 
-def build(tf, model, levs):
+def build(tf, model, levs, bin_pct=None):
     candles = fetch_candles(tf)
     price = candles[-1]["close"]
     notes, used = [], []
@@ -585,9 +587,11 @@ def build(tf, model, levs):
                 tiers = tiers_from(calib["params"]["tiers"])
                 params = {"half_life_h": calib["params"]["half_life_h"], "spike_z": calib["params"]["spike_z"]}
             else:
-                tiers = tiers_from(None)
+                tiers = tiers_from([25, 50, 100])   # sin calibrar: los pools estándar 25X+50X+100X
+        if bin_pct:
+            params = dict(params or {}, bin_pct=bin_pct)
         if model == "vol":
-            heat, zones = estimate_heat(candles, {}, price, tiers, "vol")
+            heat, zones = estimate_heat(candles, {}, price, tiers, "vol", params={"bin_pct": bin_pct} if bin_pct else None)
             used = ["volumen"]
         else:
             sources, errs = load_sources(tf, candles)
@@ -646,15 +650,15 @@ def norm_args(model, levs):
     return model, levs
 
 
-def get_data(tf, model=None, levs=None):
+def get_data(tf, model=None, levs=None, bin_pct=None):
     model, levs = norm_args(model, levs)
-    key = (tf, model, levs)
+    key = (tf, model, levs, bin_pct)
     now = time.time()
     with _lock:
         hit = _cache.get(key)
         if hit and now - hit[0] < CACHE_TTL:
             return hit[1]
-    data = build(tf, model, levs)
+    data = build(tf, model, levs, bin_pct)
     with _lock:
         _cache[key] = (now, data)
         if len(_cache) > 40:
@@ -748,7 +752,7 @@ def calibrate(tf="5m"):
     if not pool:
         return {"status": "error", "error": "sin resultados"}
     best_g, best_r = max(pool, key=lambda gr: gr[1]["score"])
-    default = next((r for g, r in results if g["tiers"] == [5, 10, 25, 50, 100] and g["half_life_h"] == 72.0 and g["spike_z"] == 0.0), None)
+    default = next((r for g, r in results if g["tiers"] == [25, 50, 100] and g["half_life_h"] == 72.0 and g["spike_z"] == 0.0), None)
     res = {
         "status": "ok", "params": best_g, "score": best_r["score"], "lift": best_r["lift"], "hit": best_r["hit"], "base": best_r["base"],
         "prec_lift": best_r["prec_lift"],
@@ -902,7 +906,13 @@ def api_data():
     except ValueError:
         return jsonify({"error": "lev no válido"}), 400
     try:
-        return jsonify(get_data(tf, model, levs))
+        bin_pct = float(request.args.get("bin", "") or 0) or None
+    except ValueError:
+        return jsonify({"error": "bin no válido"}), 400
+    if bin_pct is not None and not (0.01 <= bin_pct <= 0.5):
+        return jsonify({"error": "bin fuera de rango (0.01 a 0.5)"}), 400
+    try:
+        return jsonify(get_data(tf, model, levs, bin_pct))
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
