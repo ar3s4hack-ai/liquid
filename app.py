@@ -21,6 +21,7 @@ SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
 FAPI = os.getenv("BINANCE_FAPI", "https://fapi.binance.com")
 BYBIT = os.getenv("BYBIT_BASE", "https://api.bybit.com")
 USE_BYBIT = os.getenv("USE_BYBIT", "1") == "1"
+ENABLED_SOURCES = set(os.getenv("OI_SOURCES", "binance_usdc,binance_coinm,okx_usdt,okx_usd,hyperliquid,bitget").split(","))
 
 CG_KEY = os.getenv("COINGLASS_API_KEY", "").strip()
 CG_BASE = os.getenv("COINGLASS_BASE", "https://open-api-v4.coinglass.com")
@@ -51,7 +52,9 @@ MODELS = ("auto", "oi", "vol", "cg")
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "cg" if CG_KEY else "auto")
 # Modelo: entrada al precio típico, envejecimiento (vida media en horas), filtro de picos (z, 0 = apagado)
 # y cierre de posiciones cuando baja el Open Interest.
-DEFAULT_PARAMS = {"entry": "typical", "half_life_h": 72.0, "spike_z": 0.0, "close_on_drop": True}
+# Por defecto, como Hyblock / Trading Different: un nivel vive hasta que el precio lo toca
+# (sin cierres por bajada de OI ni envejecimiento). La autocalibración puede activarlos si los datos lo justifican.
+DEFAULT_PARAMS = {"entry": "typical", "half_life_h": None, "spike_z": 0.0, "close_on_drop": False}
 MMR = 0.005
 BIN_PCT = float(os.getenv("BIN_PCT", "0.02"))
 ZONE_GAP_PCT = float(os.getenv("ZONE_GAP_PCT", "0.04"))
@@ -133,6 +136,60 @@ def fetch_oi_bybit(tf, limit=None):
     return out
 
 
+OKX_BASE = os.getenv("OKX_BASE", "https://www.okx.com")
+DAPI = os.getenv("BINANCE_DAPI", "https://dapi.binance.com")
+OKX_IV = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H"}
+_okx_cache = {}
+
+
+def fetch_oi_binance_usdc(tf, limit=None):
+    limit = limit or CANDLES[tf]
+    rows = get_json(f"{FAPI}/futures/data/openInterestHist",
+                    {"symbol": SYMBOL.replace("USDT", "USDC"), "period": tf, "limit": min(limit, 500)})
+    step = TF_SECONDS[tf]
+    return {int(r["timestamp"]) // 1000 - (int(r["timestamp"]) // 1000) % step: float(r["sumOpenInterestValue"]) for r in rows}
+
+
+def fetch_oi_binance_coinm(tf, limit=None):
+    """Binance COIN-M BTCUSD perpetuo: sumOpenInterest en contratos de 100 USD."""
+    limit = limit or CANDLES[tf]
+    rows = get_json(f"{DAPI}/futures/data/openInterestHist",
+                    {"pair": SYMBOL.replace("USDT", "USD"), "contractType": "PERPETUAL", "period": tf, "limit": min(limit, 500)})
+    step = TF_SECONDS[tf]
+    return {int(r["timestamp"]) // 1000 - (int(r["timestamp"]) // 1000) % step: float(r["sumOpenInterest"]) * 100.0 for r in rows}
+
+
+def fetch_oi_okx(inst, tf, limit=None):
+    """OKX: histórico por instrumento en USD (oiUsd). Se guarda en memoria y solo se pide lo nuevo."""
+    limit = limit or CANDLES[tf]
+    step = TF_SECONDS[tf]
+    key = (inst, tf)
+    cache = _okx_cache.setdefault(key, {"data": {}, "full": 0})
+    pages = 1 if cache["data"] and time.time() - cache["full"] < 6 * 3600 else max(1, min(9, math.ceil(limit / 100)))
+    end = None
+    for _ in range(pages):
+        params = {"instId": inst, "period": OKX_IV[tf], "limit": 100}
+        if end:
+            params["end"] = end
+        r = get_json(f"{OKX_BASE}/api/v5/rubik/stat/contracts/open-interest-history", params)
+        if str(r.get("code")) != "0":
+            raise RuntimeError(r.get("msg") or "error OKX")
+        rows = r.get("data") or []
+        if not rows:
+            break
+        for row in rows:
+            ts = int(row[0]) // 1000
+            cache["data"][ts - ts % step] = float(row[3])
+        end = min(int(row[0]) for row in rows) - 1
+        if len(rows) < 100:
+            break
+    if pages > 1:
+        cache["full"] = time.time()
+    oldest = (time.time() - (limit + 5) * step)
+    cache["data"] = {t: v for t, v in cache["data"].items() if t >= oldest}
+    return dict(cache["data"])
+
+
 def align_oi(candles, oi, step):
     times = {c["time"] for c in candles}
     best, best_n = 0, -1
@@ -157,6 +214,30 @@ def load_sources(tf, candles):
             sources["bybit"] = {t: v * px[t] for t, v in raw.items() if t in px}
         except Exception as e:
             errors.append(f"OI Bybit: {e}")
+    extra = (
+        ("binance_usdc", lambda: fetch_oi_binance_usdc(tf)),
+        ("binance_coinm", lambda: fetch_oi_binance_coinm(tf)),
+        ("okx_usdt", lambda: fetch_oi_okx("BTC-USDT-SWAP", tf)),
+        ("okx_usd", lambda: fetch_oi_okx("BTC-USD-SWAP", tf)),
+    )
+    for name, fn in extra:
+        if name not in ENABLED_SOURCES:
+            continue
+        try:
+            data = align_oi(candles, fn(), step)
+            if len(data) >= 3:
+                sources[name] = data
+        except Exception as e:
+            errors.append(f"OI {name}: {str(e)[:60]}")
+    for name in ("hyperliquid", "bitget"):
+        if name not in ENABLED_SOURCES:
+            continue
+        try:
+            data = LQ.oi_snapshots(name, candles, step)
+            if len(data) >= 3:
+                sources[name] = data
+        except Exception as e:
+            errors.append(f"OI {name}: {str(e)[:60]}")
     return sources, errors
 
 
@@ -339,9 +420,11 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
             F[1] *= decay
             F[-1] *= decay
         kept = []
+        touched_value = 0.0
         for r in recs:
             p, mass, side, b, ti = r
             if (side == 1 and c["low"] <= p) or (side == -1 and c["high"] >= p):
+                touched_value += mass * F[side]
                 k = k_of(side)
                 vals[b][k] -= mass
                 tv[b][k][ti] -= mass
@@ -375,7 +458,9 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
                     for lev, w in tiers:
                         add(entry * (1 - 1 / lev + MMR), d * w, 1, lev, touched)
                         add(entry * (1 + 1 / lev - MMR), d * w, -1, lev, touched)
-            elif d is not None and d < 0 and P.get("close_on_drop", True):
+            elif d is not None and d < 0 and P.get("close_on_drop", False):
+                # cada liquidación ejecutada (tocada) ya bajó el OI: solo el resto son cierres voluntarios
+                d = min(0.0, d + touched_value)
                 if c["close"] > c["open"]:
                     closing = [(-1, 1.0)]
                 elif c["close"] < c["open"]:
@@ -384,7 +469,7 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
                     closing = [(1, 0.5), (-1, 0.5)]
                 for side, share in closing:
                     cur = M[side] * F[side]
-                    if cur > 0:
+                    if cur > 0 and d < 0:
                         F[side] *= max(0.0, 1 - (-d) * share / cur)
         for side in (1, -1):
             if F[side] < 1e-3:
@@ -585,7 +670,8 @@ def build(tf, model, levs, bin_pct=None):
             calib = calib_params()
             if calib:
                 tiers = tiers_from(calib["params"]["tiers"])
-                params = {"half_life_h": calib["params"]["half_life_h"], "spike_z": calib["params"]["spike_z"]}
+                params = {"half_life_h": calib["params"].get("half_life_h"), "spike_z": calib["params"].get("spike_z", 0.0),
+                          "close_on_drop": calib["params"].get("close_on_drop", False)}
             else:
                 tiers = tiers_from([25, 50, 100])   # sin calibrar: los pools estándar 25X+50X+100X
         if bin_pct:
@@ -687,7 +773,8 @@ def run_validation(tf, levs):
     plan = [("oi", tiers, None), ("vol", tiers, None)]
     if calib:
         plan.insert(0, ("auto", tiers_from(calib["params"]["tiers"]),
-                        {"half_life_h": calib["params"]["half_life_h"], "spike_z": calib["params"]["spike_z"]}))
+                        {"half_life_h": calib["params"].get("half_life_h"), "spike_z": calib["params"].get("spike_z", 0.0),
+                         "close_on_drop": calib["params"].get("close_on_drop", False)}))
     for name, tr, params in plan:
         if name != "vol" and not sources:
             continue
@@ -703,11 +790,14 @@ def run_validation(tf, levs):
 
 
 CALIB_GRID = [
-    {"tiers": t, "half_life_h": h, "spike_z": z}
+    {"tiers": t, "half_life_h": h, "spike_z": z, "close_on_drop": c}
     for t in ([25, 50, 100], [10, 25, 50, 100], [5, 10, 25, 50, 100])
     for h in (None, 24.0, 72.0)
     for z in (0.0, 1.0)
+    for c in (False, True)
 ]
+CALIB_DEFAULT = {"tiers": [25, 50, 100], "half_life_h": None, "spike_z": 0.0, "close_on_drop": False}
+CALIB_MARGIN = float(os.getenv("CALIB_MARGIN", "1.05"))
 CALIB_MIN_EVENTS = int(os.getenv("CALIB_MIN_EVENTS", "100"))
 CALIB_MIN_HOURS = float(os.getenv("CALIB_MIN_HOURS", "24"))
 
@@ -734,7 +824,7 @@ def calibrate(tf="5m"):
     for g in CALIB_GRID:
         out = {}
         heat, _ = estimate_heat(candles, sources, price, tiers_from(g["tiers"]), "oi", out=out,
-                                params={"half_life_h": g["half_life_h"], "spike_z": g["spike_z"]})
+                                params={"half_life_h": g["half_life_h"], "spike_z": g["spike_z"], "close_on_drop": g["close_on_drop"]})
         r = LQ.validate(candles, step, heat, out["touches"], events, covered)
         results.append((g, r))
     def score(r):
@@ -752,7 +842,10 @@ def calibrate(tf="5m"):
     if not pool:
         return {"status": "error", "error": "sin resultados"}
     best_g, best_r = max(pool, key=lambda gr: gr[1]["score"])
-    default = next((r for g, r in results if g["tiers"] == [25, 50, 100] and g["half_life_h"] == 72.0 and g["spike_z"] == 0.0), None)
+    default = next((r for g, r in results if g == CALIB_DEFAULT), None)
+    # solo se abandona la configuración estándar si otra es claramente mejor (no por ruido)
+    if default and default["score"] is not None and best_r["score"] < default["score"] * CALIB_MARGIN:
+        best_g, best_r = CALIB_DEFAULT, default
     res = {
         "status": "ok", "params": best_g, "score": best_r["score"], "lift": best_r["lift"], "hit": best_r["hit"], "base": best_r["base"],
         "prec_lift": best_r["prec_lift"],
@@ -766,6 +859,39 @@ def calibrate(tf="5m"):
         for k in [k for k in _cache if k[1] == "auto"]:
             del _cache[k]
     return res
+
+
+def snapshot_oi_now():
+    """OI actual en USD de exchanges sin histórico público; se guarda cada minuto en la base de datos."""
+    out = {}
+    try:
+        r = requests.post("https://api.hyperliquid.xyz/info", json={"type": "metaAndAssetCtxs"}, timeout=10).json()
+        names = [u["name"] for u in r[0]["universe"]]
+        ctx = r[1][names.index(SYMBOL.replace("USDT", ""))]
+        out["hyperliquid"] = float(ctx["openInterest"]) * float(ctx["markPx"])
+    except Exception:
+        pass
+    try:
+        r = get_json("https://api.bitget.com/api/v2/mix/market/open-interest",
+                     {"symbol": SYMBOL, "productType": "usdt-futures"})
+        size = float(r["data"]["openInterestList"][0]["size"])
+        px = LQ.MARK["price"] or fetch_current_price()
+        out["bitget"] = size * px
+    except Exception:
+        pass
+    good = {k: v for k, v in out.items() if 1e8 <= v <= 2e11}   # descarta unidades raras
+    if good:
+        LQ.save_oi_snapshots(good)
+    return good
+
+
+def snapshot_loop():
+    while True:
+        try:
+            snapshot_oi_now()
+        except Exception as e:
+            print("snapshot OI:", e, flush=True)
+        time.sleep(60)
 
 
 def calib_loop():
@@ -886,6 +1012,7 @@ start_alerts()
 LQ.start()
 if os.getenv("COLLECT", "1") != "0":
     threading.Thread(target=calib_loop, daemon=True, name="calib").start()
+    threading.Thread(target=snapshot_loop, daemon=True, name="oi-snap").start()
 
 
 # ───────────── Rutas ─────────────

@@ -554,7 +554,8 @@ function updateStatus() {
   const hora = new Date(data.updated * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
   const current = livePrice ?? data.price;
   const liveClass = wsLive ? 'price-live' : 'price-offline';
-  st.innerHTML = `<span class="${cls}">${data.source}</span> (${data.used.join('+')}) · ${hora}<br>` +
+  const srcTxt = data.used.length > 2 ? `${data.used.length} fuentes` : data.used.join('+');
+  st.innerHTML = `<span class="${cls}">${data.source}</span> (${srcTxt}) · ${hora}<br>` +
     `<span class="${liveClass}">${fmtLive(current)}</span>` +
     (data.ctx && data.ctx.chg24 !== undefined ? ` <span class="${data.ctx.chg24 >= 0 ? 'rt' : 'err'}">${data.ctx.chg24 >= 0 ? '+' : ''}${data.ctx.chg24.toFixed(2).replace('.', ',')}% 24h</span>` : '') +
     (data.ctx && data.ctx.mark ? `<br><span class="muted2">marca ${fmtLive(data.ctx.mark)}</span>` : '') + '<br>' +
@@ -763,6 +764,11 @@ function renderVal(v) {
   }
   const c = (data && data.ctx) || {};
   const lq = (data && data.liqs) || {};
+  const SRC_NAME = { binance: 'Binance USDT', binance_usdc: 'Binance USDC', binance_coinm: 'Binance COIN-M', bybit: 'Bybit',
+    okx_usdt: 'OKX USDT', okx_usd: 'OKX USD', hyperliquid: 'Hyperliquid', bitget: 'Bitget', volumen: 'Volumen', coinglass: 'Coinglass' };
+  if (data && data.used) parts.push(`<h4>Fuentes de Open Interest (${data.used.length})</h4>
+    <div>${data.used.map(u => SRC_NAME[u] || u).join(' · ')}</div>
+    <div class="muted">Hyperliquid y Bitget no publican histórico: se graban cada minuto y suman datos con el paso de las horas.</div>`);
   parts.push(`<h4>Contexto del mercado</h4>
     <div>Funding: <b>${c.funding !== undefined ? (c.funding * 100).toFixed(4) + '%' : '–'}</b> <span class="muted">(positivo: pagan los largos)</span></div>
     <div>Largos/cortos (cuentas): <b>${c.ls_accounts ? c.ls_accounts.toFixed(2) : '–'}</b>${c.long_pct ? ` <span class="muted">(${Math.round(c.long_pct * 100)}% en largo)</span>` : ''}</div>

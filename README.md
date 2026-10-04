@@ -84,3 +84,12 @@ CALIB_MIN_HOURS     horas mínimas escuchando para calibrar (24)
 - Curvas acumuladas en el perfil: roja = cortos por encima del precio, verde = largos por debajo.
 - Fondo teñido en la zona futura: rojizo por encima del precio, verdoso por debajo.
 - Deslizador de intensidad del color (escala de maxHeat).
+
+## v9: modelo como Hyblock / Trading Different y 8 fuentes de Open Interest
+- Por defecto un nivel vive hasta que el precio lo toca (sin cierres por bajada de OI ni envejecimiento).
+  Motivo: con cierres + envejecimiento, la liquidez de largos de 25x que quedó tras una caída (p. ej. 83.500)
+  se debilitaba al 39% del máximo y casi no se veía; sin ellos queda como la zona más fuerte (100%).
+- Cierres corregidos (si la calibración los activa): la bajada del OI explicada por liquidaciones ya tocadas no cuenta dos veces.
+- Autocalibración con 36 combinaciones; solo abandona la configuración estándar si otra es ≥5% mejor (CALIB_MARGIN).
+- Fuentes de OI: Binance USDT, Binance USDC, Binance COIN-M, Bybit, OKX USDT, OKX USD (con histórico) +
+  Hyperliquid y Bitget (se graban cada minuto en la base de datos). OI_SOURCES permite desactivar alguna.

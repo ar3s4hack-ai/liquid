@@ -59,6 +59,7 @@ def _conn():
         _db.execute("CREATE INDEX IF NOT EXISTS liq_ts ON liq(ts)")
         _db.execute("CREATE TABLE IF NOT EXISTS hb(ts INTEGER PRIMARY KEY)")
         _db.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+        _db.execute("CREATE TABLE IF NOT EXISTS oi_snap(ts INTEGER, src TEXT, usd REAL, PRIMARY KEY (ts, src))")
         _db.commit()
     return _db
 
@@ -92,6 +93,7 @@ def cleanup(now=None):
         c = _conn()
         c.execute("DELETE FROM liq WHERE ts < ?", (lim * 1000,))
         c.execute("DELETE FROM hb WHERE ts < ?", (lim,))
+        c.execute("DELETE FROM oi_snap WHERE ts < ?", (lim,))
         c.commit()
 
 
@@ -109,6 +111,28 @@ def covered_minutes(t0, t1):
     with _db_lock:
         rows = _conn().execute("SELECT ts FROM hb WHERE ts >= ? AND ts < ?", (int(t0), int(t1))).fetchall()
     return {r[0] for r in rows}
+
+
+def save_oi_snapshots(values, now=None):
+    m = int((now or time.time()) // 60 * 60)
+    with _db_lock:
+        c = _conn()
+        c.executemany("INSERT OR REPLACE INTO oi_snap VALUES (?, ?, ?)", [(m, k, float(v)) for k, v in values.items()])
+        c.commit()
+
+
+def oi_snapshots(src, candles, step):
+    """OI grabado por minuto -> valor al cierre de cada vela (último minuto dentro de la vela)."""
+    if not candles:
+        return {}
+    t0, t1 = candles[0]["time"], candles[-1]["time"] + step
+    with _db_lock:
+        rows = _conn().execute("SELECT ts, usd FROM oi_snap WHERE src = ? AND ts >= ? AND ts < ? ORDER BY ts",
+                               (src, int(t0), int(t1))).fetchall()
+    out = {}
+    for ts, usd in rows:
+        out[ts - ts % step] = usd   # en orden: se queda el último minuto de cada vela
+    return out
 
 
 def meta_set(k, value):
