@@ -21,7 +21,9 @@ SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
 FAPI = os.getenv("BINANCE_FAPI", "https://fapi.binance.com")
 BYBIT = os.getenv("BYBIT_BASE", "https://api.bybit.com")
 USE_BYBIT = os.getenv("USE_BYBIT", "1") == "1"
-ENABLED_SOURCES = set(os.getenv("OI_SOURCES", "binance_usdc,binance_coinm,okx_usdt,okx_usd,hyperliquid,bitget").split(","))
+ENABLED_SOURCES = set(os.getenv("OI_SOURCES", "binance_usdc,binance_coinm,okx_usdt,okx_usd,hyperliquid,bitget,deribit,bitmex").split(","))
+EX_GROUPS = {"binance": ["binance", "binance_usdc", "binance_coinm"], "bybit": ["bybit"], "okx": ["okx_usdt", "okx_usd"],
+             "deribit": ["deribit"], "bitmex": ["bitmex"], "hyperliquid": ["hyperliquid"], "bitget": ["bitget"]}
 
 CG_KEY = os.getenv("COINGLASS_API_KEY", "").strip()
 CG_BASE = os.getenv("COINGLASS_BASE", "https://open-api-v4.coinglass.com")
@@ -41,13 +43,14 @@ ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN_MIN", "60")) * 60
 ASIA_START = int(os.getenv("ASIA_START_UTC", "0"))
 ASIA_END = int(os.getenv("ASIA_END_UTC", "7"))
 
-CANDLES = {"5m": 900, "15m": 800, "1h": 600, "4h": 300}
-TF_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
-BYBIT_IV = {"5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h"}
-CG_RANGE = {"5m": "24h", "15m": "3d", "1h": "7d", "4h": "30d"}
+CANDLES = {"5m": 900, "15m": 800, "1h": 600, "4h": 300, "1d": 300}
+RANGE_BY_TF = {"5m": 8.0, "15m": 10.0, "1h": 15.0, "4h": 35.0, "1d": 40.0}
+TF_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+BYBIT_IV = {"5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1d"}
+CG_RANGE = {"5m": "24h", "15m": "3d", "1h": "7d", "4h": "30d", "1d": "30d"}
 
-ALL_TIERS = [5, 10, 25, 50, 100]
-TIER_W = {5: 0.15, 10: 0.25, 25: 0.30, 50: 0.18, 100: 0.12}
+ALL_TIERS = [3, 5, 10, 25, 50, 100]
+TIER_W = {3: 0.08, 5: 0.12, 10: 0.22, 25: 0.28, 50: 0.18, 100: 0.12}
 MODELS = ("auto", "oi", "vol", "cg")
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "cg" if CG_KEY else "auto")
 # Modelo: entrada al precio típico, envejecimiento (vida media en horas), filtro de picos (z, 0 = apagado)
@@ -138,7 +141,7 @@ def fetch_oi_bybit(tf, limit=None):
 
 OKX_BASE = os.getenv("OKX_BASE", "https://www.okx.com")
 DAPI = os.getenv("BINANCE_DAPI", "https://dapi.binance.com")
-OKX_IV = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H"}
+OKX_IV = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D"}
 _okx_cache = {}
 
 
@@ -200,14 +203,20 @@ def align_oi(candles, oi, step):
     return {t + best: v for t, v in oi.items()}
 
 
-def load_sources(tf, candles):
+def load_sources(tf, candles, groups=None):
     step = TF_SECONDS[tf]
     sources, errors = {}, []
-    try:
-        sources["binance"] = align_oi(candles, fetch_oi_binance(tf), step)
-    except Exception as e:
-        errors.append(f"OI Binance: {e}")
-    if USE_BYBIT:
+    want = None if not groups else {s for g in groups for s in EX_GROUPS.get(g, [])}
+
+    def ok(name):
+        return want is None or name in want
+
+    if ok("binance"):
+        try:
+            sources["binance"] = align_oi(candles, fetch_oi_binance(tf), step)
+        except Exception as e:
+            errors.append(f"OI Binance: {e}")
+    if USE_BYBIT and ok("bybit"):
         try:
             raw = align_oi(candles, fetch_oi_bybit(tf), step)
             px = {c["time"]: c["close"] for c in candles}
@@ -221,7 +230,7 @@ def load_sources(tf, candles):
         ("okx_usd", lambda: fetch_oi_okx("BTC-USD-SWAP", tf)),
     )
     for name, fn in extra:
-        if name not in ENABLED_SOURCES:
+        if name not in ENABLED_SOURCES or not ok(name):
             continue
         try:
             data = align_oi(candles, fn(), step)
@@ -229,8 +238,8 @@ def load_sources(tf, candles):
                 sources[name] = data
         except Exception as e:
             errors.append(f"OI {name}: {str(e)[:60]}")
-    for name in ("hyperliquid", "bitget"):
-        if name not in ENABLED_SOURCES:
+    for name in ("hyperliquid", "bitget", "deribit", "bitmex"):
+        if name not in ENABLED_SOURCES or not ok(name):
             continue
         try:
             data = LQ.oi_snapshots(name, candles, step)
@@ -353,7 +362,8 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
     P = dict(DEFAULT_PARAMS)
     P.update(params or {})
     size = price * (P.get("bin_pct") or BIN_PCT) / 100
-    lo, hi = price * (1 - RANGE_PCT / 100), price * (1 + RANGE_PCT / 100)
+    rng = P.get("range_pct") or RANGE_PCT
+    lo, hi = price * (1 - rng / 100), price * (1 + rng / 100)
     n = len(candles)
     step = (candles[1]["time"] - candles[0]["time"]) if n > 1 else 300
     decay = 0.5 ** (step / (P["half_life_h"] * 3600)) if P.get("half_life_h") else 1.0
@@ -644,7 +654,7 @@ def calib_params():
     return None
 
 
-def build(tf, model, levs, bin_pct=None):
+def build(tf, model, levs, bin_pct=None, groups=None):
     candles = fetch_candles(tf)
     price = candles[-1]["close"]
     notes, used = [], []
@@ -674,13 +684,14 @@ def build(tf, model, levs, bin_pct=None):
                           "close_on_drop": calib["params"].get("close_on_drop", False)}
             else:
                 tiers = tiers_from([25, 50, 100])   # sin calibrar: los pools estándar 25X+50X+100X
+        params = dict(params or {}, range_pct=RANGE_BY_TF.get(tf, RANGE_PCT))
         if bin_pct:
-            params = dict(params or {}, bin_pct=bin_pct)
+            params["bin_pct"] = bin_pct
         if model == "vol":
-            heat, zones = estimate_heat(candles, {}, price, tiers, "vol", params={"bin_pct": bin_pct} if bin_pct else None)
+            heat, zones = estimate_heat(candles, {}, price, tiers, "vol", params={"bin_pct": bin_pct, "range_pct": params["range_pct"]})
             used = ["volumen"]
         else:
-            sources, errs = load_sources(tf, candles)
+            sources, errs = load_sources(tf, candles, groups)
             notes += errs
             if not sources:
                 raise RuntimeError("; ".join(notes) or "sin datos de Open Interest")
@@ -697,6 +708,8 @@ def build(tf, model, levs, bin_pct=None):
         "tf": tf,
         "model": model,
         "models": ["auto", "oi", "vol"] + (["cg"] if CG_KEY else []),
+        "exchanges": list(EX_GROUPS),
+        "ex": list(groups) if groups else [],
         "levs": [l for l, _ in tiers] if heat.get("mode") == "time" else [],
         "calib": ({"lift": calib.get("lift"), "events": calib.get("events"), "params": calib.get("params"), "updated": calib.get("updated")}
                   if calib else ({"status": "pendiente"} if model == "auto" else None)),
@@ -736,15 +749,16 @@ def norm_args(model, levs):
     return model, levs
 
 
-def get_data(tf, model=None, levs=None, bin_pct=None):
+def get_data(tf, model=None, levs=None, bin_pct=None, groups=None):
     model, levs = norm_args(model, levs)
-    key = (tf, model, levs, bin_pct)
+    groups = tuple(sorted(g for g in (groups or ()) if g in EX_GROUPS)) or None
+    key = (tf, model, levs, bin_pct, groups)
     now = time.time()
     with _lock:
         hit = _cache.get(key)
         if hit and now - hit[0] < CACHE_TTL:
             return hit[1]
-    data = build(tf, model, levs, bin_pct)
+    data = build(tf, model, levs, bin_pct, groups)
     with _lock:
         _cache[key] = (now, data)
         if len(_cache) > 40:
@@ -877,6 +891,17 @@ def snapshot_oi_now():
         size = float(r["data"]["openInterestList"][0]["size"])
         px = LQ.MARK["price"] or fetch_current_price()
         out["bitget"] = size * px
+    except Exception:
+        pass
+    try:
+        r = get_json("https://www.deribit.com/api/v2/public/get_book_summary_by_instrument",
+                     {"instrument_name": LQ.DERIBIT_INST})
+        out["deribit"] = float(r["result"][0]["open_interest"])   # perpetuo inverso: ya en USD
+    except Exception:
+        pass
+    try:
+        r = get_json("https://www.bitmex.com/api/v1/instrument", {"symbol": LQ.BITMEX_SYMBOL, "columns": "openInterest"})
+        out["bitmex"] = float(r[0]["openInterest"])   # XBTUSD: 1 contrato = 1 USD
     except Exception:
         pass
     good = {k: v for k, v in out.items() if 1e8 <= v <= 2e11}   # descarta unidades raras
@@ -1039,7 +1064,8 @@ def api_data():
     if bin_pct is not None and not (0.01 <= bin_pct <= 0.5):
         return jsonify({"error": "bin fuera de rango (0.01 a 0.5)"}), 400
     try:
-        return jsonify(get_data(tf, model, levs, bin_pct))
+        groups = [g for g in request.args.get("ex", "").split(",") if g]
+        return jsonify(get_data(tf, model, levs, bin_pct, groups))
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 

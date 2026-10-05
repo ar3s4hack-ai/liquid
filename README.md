@@ -93,3 +93,12 @@ CALIB_MIN_HOURS     horas mínimas escuchando para calibrar (24)
 - Autocalibración con 36 combinaciones; solo abandona la configuración estándar si otra es ≥5% mejor (CALIB_MARGIN).
 - Fuentes de OI: Binance USDT, Binance USDC, Binance COIN-M, Bybit, OKX USDT, OKX USD (con histórico) +
   Hyperliquid y Bitget (se graban cada minuto en la base de datos). OI_SOURCES permite desactivar alguna.
+
+## v10: mismas fuentes que Trading Different (y alguna más)
+Según su web, Trading Different usa Binance, Bybit, Deribit, Hyperliquid y BitMEX, con apalancamientos de 3x a 100x
+y temporalidades 5m a 1D, y permite ver los pools por exchange. Aquí:
+- Liquidaciones reales (validación): Binance, Bybit, OKX, Deribit y BitMEX.
+- Open Interest: Binance USDT/USDC/COIN-M, Bybit, OKX USDT/USD (histórico) + Hyperliquid, Bitget, Deribit y BitMEX (grabados cada minuto).
+- Apalancamientos 3x, 5x, 10x, 25x, 50x, 100x (rango ampliado en 4h y 1D). Temporalidad 1D.
+- ⚙ → Exchanges: elegir de qué exchanges sale el Open Interest (como sus pools por exchange). Parámetro ex=okx,bybit…
+- Barra de Pools: «Grupo» (tramo ≈ grupo × 5 puntos; automático = precio / 10.000).

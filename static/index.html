@@ -49,17 +49,21 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
   <button data-tf="15m">15m</button>
   <button data-tf="1h">1h</button>
   <button data-tf="4h">4h</button>
+  <button data-tf="1d">1D</button>
   <button id="bVal">✓ Validez</button>
   <button id="bCfg">⚙</button>
   <div id="st">cargando…</div>
   <div id="pools">
     <span>Pools:</span>
+    <label><input type="checkbox" data-pool="3">3X: <span class="pv" data-pv="3">–</span></label>
+    <label><input type="checkbox" data-pool="5">5X: <span class="pv" data-pv="5">–</span></label>
     <label><input type="checkbox" data-pool="10">10X: <span class="pv" data-pv="10">–</span></label>
     <label><input type="checkbox" data-pool="25">25X: <span class="pv" data-pv="25">–</span></label>
     <label><input type="checkbox" data-pool="50">50X: <span class="pv" data-pv="50">–</span></label>
     <label><input type="checkbox" data-pool="100">100X: <span class="pv" data-pv="100">–</span></label>
     <span class="tot">Total: <span id="pTot">–</span></span>
     <span class="cum" id="pCum"></span>
+    <label title="Grosor de cada tramo: ≈ grupo × 5 puntos. Automático = precio / 10.000">Grupo <input type="number" id="pGroup" min="1" max="40" step="0.5" style="width:62px"></label>
     <button id="bAuto" class="tg">Auto</button>
     <span class="grad"></span><input type="range" id="pInt" min="0.3" max="3" step="0.1" title="Intensidad del color">
   </div>
@@ -73,6 +77,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
     <div class="row"><div class="lbl">Capas</div>
       <button id="bProf" class="tg on">Perfil</button><button id="bMode" class="tg">Calor</button><button id="bZones" class="tg">Zonas</button>
       <button id="bAsia" class="tg">Asia</button><button id="bLiq" class="tg">Liq</button><button id="bBook" class="tg">Libro</button></div>
+    <div class="row"><div class="lbl">Exchanges del Open Interest</div><div id="cEx"></div></div>
     <div class="row"><div class="lbl">Modelo</div><div id="cModel"></div></div>
     <div class="row"><div class="lbl">Apalancamientos</div><div id="cLev"></div></div>
     <div class="row"><div class="lbl">Paleta</div><div id="cPal"></div></div>
@@ -83,9 +88,9 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 const K = new URLSearchParams(location.search).get('k');
-const TFS = { '5m': 300, '15m': 900, '1h': 3600, '4h': 14400 };
-const ALL = [5, 10, 25, 50, 100];
-const TIER_COL = { 5: '#a78bfa', 10: '#4f8cff', 25: '#1fd11f', 50: '#f2ea0c', 100: '#e8140c' };
+const TFS = { '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 };
+const ALL = [3, 5, 10, 25, 50, 100];
+const TIER_COL = { 3: '#f472b6', 5: '#a78bfa', 10: '#4f8cff', 25: '#1fd11f', 50: '#f2ea0c', 100: '#e8140c' };
 // vista Pro: 4 colores fijos, de menos a más (turquesa, verde, amarillo, rojo)
 const PRO_COLS = ['#008f8f', '#0fbf0f', '#f0e60a', '#e8100a'];
 const MODEL_NAME = { auto: 'Auto (calibrado)', oi: 'Open Interest', vol: 'Volumen', cg: 'Coinglass' };
@@ -93,7 +98,7 @@ const WARM = [[0, 0, 110], [0, 150, 150], [0, 200, 0], [240, 240, 0], [255, 0, 0
 const COOL = [[123, 44, 191], [45, 108, 223], [255, 214, 10]];
 
 const CFG_VER = 7;
-let cfg = { ver: CFG_VER, model: 'auto', levs: [25, 50, 100], palette: 'warm', minPct: 24, view: 'pro', book: false, intensity: 1 };
+let cfg = { ver: CFG_VER, model: 'auto', levs: [25, 50, 100], palette: 'warm', minPct: 24, view: 'pro', book: false, intensity: 1, group: null, ex: [] };
 try {
   const saved = JSON.parse(localStorage.getItem('liq_cfg') || '{}');
   // ajustes de versiones antiguas: se conserva solo la paleta y el mínimo
@@ -311,6 +316,14 @@ function smoothActive(act, size) {
   });
 }
 
+let lastKnownPrice = null;
+function binParam() {
+  // grupo (como Trading Different): tramo ≈ grupo × 5 puntos; automático = precio / 10.000 -> 0,05 %
+  if (!cfg.group) return '0.05';
+  const px = lastKnownPrice || 85000;
+  return Math.min(0.5, Math.max(0.01, cfg.group * 5 / px * 100)).toFixed(4);
+}
+
 function proMax() {
   const m = data.heat.max_abs || data.heat.max || 0;
   return m / Math.max(0.1, cfg.intensity || 1);
@@ -483,7 +496,8 @@ function updateHeader() {
   const min = (cfg.minPct / 100) * data.heat.max;
   if (cfg.view === 'pro' && data.heat.mode === 'time') {
     const mxp = proMax();
-    hdr.textContent = `BINANCE:${data.symbol} · ${tf} · Pools ${data.levs.map(l => l + 'X').join('+')} · Total ≥ ${fmtM((cfg.minPct / 100) * mxp)} · maxHeat ${fmtM(mxp)}`;
+    const exTxt = data.ex && data.ex.length ? data.ex.map(x => x.toUpperCase()).join('+') : 'todos';
+    hdr.textContent = `BINANCE:${data.symbol} · ${tf} · Pools ${data.levs.map(l => l + 'X').join('+')} · Total ≥ ${fmtM((cfg.minPct / 100) * mxp)} · maxHeat ${fmtM(mxp)} · OI: ${exTxt}`;
     return;
   }
   const mname = data.model === 'auto' ? (data.calib && data.calib.params ? 'Auto (calibrado)' : 'Auto (sin calibrar aún)') : (MODEL_NAME[data.model] || data.model);
@@ -647,7 +661,8 @@ function scheduleReconnect() {
 
 async function load() {
   try {
-    const q = `tf=${tf}&model=${cfg.model}&lev=${cfg.levs.join(',')}` + (cfg.view === 'pro' ? '&bin=0.05' : '') + (K ? '&k=' + encodeURIComponent(K) : '');
+    const q = `tf=${tf}&model=${cfg.model}&lev=${cfg.levs.join(',')}` + (cfg.view === 'pro' ? '&bin=' + binParam() : '') +
+      (cfg.ex.length ? '&ex=' + cfg.ex.join(',') : '') + (K ? '&k=' + encodeURIComponent(K) : '');
     const r = await fetch('/api/data?' + q, { cache: 'no-store' });
     const d = await r.json();
     if (d.error) throw new Error(d.error);
@@ -666,6 +681,7 @@ async function load() {
       first = false;
     }
     version++;
+    lastKnownPrice = d.price;
     tindex = {}; d.candles.forEach((c, i) => { tindex[c.time] = i; });
     if (d.heat && d.heat.active) d.profAct = smoothActive(d.heat.active, d.heat.size);
     updateAsia(); updateZones(); updateZoneLines(); updateStatus(); updateHeader(); buildCfg(); syncPools();
@@ -691,6 +707,14 @@ function buildCfg() {
     const reload = (cfg.view === 'pro') !== (v === 'pro');
     cfg.view = v; saveCfg(); version++; updateZoneLines(); updateHeader(); if (livePrice !== null) setPriceLine(livePrice); buildCfg();
     if (reload) { first = true; data = null; lastSig = ''; load(); }
+  })));
+  const EX_NAME = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', deribit: 'Deribit', bitmex: 'BitMEX', hyperliquid: 'Hyperliquid', bitget: 'Bitget' };
+  const exs = (data && data.exchanges) || Object.keys(EX_NAME);
+  const ce = document.getElementById('cEx'); ce.innerHTML = '';
+  ce.appendChild(chip('Todos', !cfg.ex.length, () => { cfg.ex = []; saveCfg(); data = null; lastSig = ''; load(); }));
+  exs.forEach(x => ce.appendChild(chip(EX_NAME[x] || x, cfg.ex.includes(x), () => {
+    cfg.ex = cfg.ex.includes(x) ? cfg.ex.filter(y => y !== x) : cfg.ex.concat(x);
+    saveCfg(); data = null; lastSig = ''; load();
   })));
   const models = (data && data.models) || ['auto', 'oi', 'vol'];
   const cm = document.getElementById('cModel'); cm.innerHTML = '';
@@ -765,10 +789,10 @@ function renderVal(v) {
   const c = (data && data.ctx) || {};
   const lq = (data && data.liqs) || {};
   const SRC_NAME = { binance: 'Binance USDT', binance_usdc: 'Binance USDC', binance_coinm: 'Binance COIN-M', bybit: 'Bybit',
-    okx_usdt: 'OKX USDT', okx_usd: 'OKX USD', hyperliquid: 'Hyperliquid', bitget: 'Bitget', volumen: 'Volumen', coinglass: 'Coinglass' };
+    okx_usdt: 'OKX USDT', okx_usd: 'OKX USD', hyperliquid: 'Hyperliquid', bitget: 'Bitget', deribit: 'Deribit', bitmex: 'BitMEX', volumen: 'Volumen', coinglass: 'Coinglass' };
   if (data && data.used) parts.push(`<h4>Fuentes de Open Interest (${data.used.length})</h4>
     <div>${data.used.map(u => SRC_NAME[u] || u).join(' · ')}</div>
-    <div class="muted">Hyperliquid y Bitget no publican histórico: se graban cada minuto y suman datos con el paso de las horas.</div>`);
+    <div class="muted">Hyperliquid, Bitget, Deribit y BitMEX no publican histórico: se graban cada minuto y suman datos con el paso de las horas.</div>`);
   parts.push(`<h4>Contexto del mercado</h4>
     <div>Funding: <b>${c.funding !== undefined ? (c.funding * 100).toFixed(4) + '%' : '–'}</b> <span class="muted">(positivo: pagan los largos)</span></div>
     <div>Largos/cortos (cuentas): <b>${c.ls_accounts ? c.ls_accounts.toFixed(2) : '–'}</b>${c.long_pct ? ` <span class="muted">(${Math.round(c.long_pct * 100)}% en largo)</span>` : ''}</div>
@@ -777,7 +801,7 @@ function renderVal(v) {
   const col = v.collectors || {};
   const dot = (x) => x && x.connected ? '<span class="ok">●</span>' : '<span class="bad">●</span>';
   parts.push(`<h4>Recogida de liquidaciones reales</h4>
-    <div>${['binance', 'bybit', 'okx'].map(ex => `${dot(col[ex])} ${ex[0].toUpperCase() + ex.slice(1)}`).join(' · ')}</div>
+    <div>${['binance', 'bybit', 'okx', 'deribit', 'bitmex'].map(ex => `${dot(col[ex])} ${ex[0].toUpperCase() + ex.slice(1)}`).join(' · ')}</div>
     <div class="muted">Guardadas: ${(v.db && v.db.events) || 0} · escuchando ${String((v.db && v.db.hours_listening) || 0).replace('.', ',')} h en total</div>
     <h4>Cómo leerlo</h4>
     <div class="muted">Acierto: % del dinero liquidado que cayó en una zona que el heatmap ya marcaba antes. Azar: lo que se acertaría con un precio cualquiera cercano. Burbuja <span class="L">naranja</span> = largos liquidados, <span class="S">cian</span> = cortos. Binance solo envía una muestra (1 por segundo).</div>`);
@@ -830,7 +854,7 @@ bAsia.onclick = () => { showAsia = !showAsia; bAsia.classList.toggle('on', showA
 bZones.onclick = () => { showZones = !showZones; bZones.classList.toggle('on', showZones); updateZones(); updateZoneLines(); };
 bProf.onclick = () => { showProf = !showProf; bProf.classList.toggle('on', showProf); };
 
-const POOL_TIERS = [10, 25, 50, 100];
+const POOL_TIERS = [3, 5, 10, 25, 50, 100];
 function poolReadout(price) {
   const pv = (t) => document.querySelector(`[data-pv="${t}"]`);
   if (!data || !data.heat.active || price === null || price === undefined) {
@@ -863,6 +887,9 @@ function syncPools() {
   document.querySelectorAll('input[data-pool]').forEach(cb => { cb.checked = levs.includes(+cb.dataset.pool); });
   document.getElementById('bAuto').classList.toggle('on', auto);
   document.getElementById('pInt').value = cfg.intensity || 1;
+  const pg = document.getElementById('pGroup');
+  pg.value = cfg.group || '';
+  pg.placeholder = 'auto ' + ((lastKnownPrice || 85000) / 10000).toFixed(1);
 }
 document.querySelectorAll('input[data-pool]').forEach(cb => {
   cb.onchange = () => {
@@ -876,6 +903,10 @@ document.querySelectorAll('input[data-pool]').forEach(cb => {
 });
 document.getElementById('bAuto').onclick = () => { cfg.model = 'auto'; saveCfg(); data = null; lastSig = ''; syncPools(); load(); };
 document.getElementById('pInt').oninput = (e) => { cfg.intensity = +e.target.value; saveCfg(); version++; updateHeader(); };
+document.getElementById('pGroup').onchange = (e) => {
+  const v = parseFloat(String(e.target.value).replace(',', '.'));
+  cfg.group = v > 0 ? v : null; saveCfg(); data = null; lastSig = ''; load();
+};
 
 window.addEventListener('resize', layout);
 layout();

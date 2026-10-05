@@ -29,7 +29,7 @@ LIQ_MIN_USD = float(os.getenv("LIQ_MIN_USD", "5000"))
 # Binance separó sus WebSocket de futuros en 2026: liquidaciones, precio de marca, velas y operaciones van por /market
 BINANCE_WS = os.getenv("BINANCE_WS", "wss://fstream.binance.com/market")
 
-EXCHANGES = ("binance", "bybit", "okx")
+EXCHANGES = ("binance", "bybit", "okx", "deribit", "bitmex")
 STATUS = {ex: {"connected": False, "last_msg": 0, "events": 0, "error": None, "since": None} for ex in EXCHANGES}
 MARK = {"price": None, "funding": None, "next_funding": None, "ts": 0}
 
@@ -238,6 +238,58 @@ def parse_okx(msg):
     return out
 
 
+DERIBIT_INST = os.getenv("DERIBIT_INST", "BTC-PERPETUAL")
+
+
+def parse_deribit(msg):
+    """trades.BTC-PERPETUAL: 'liquidation' = T (el que toma la orden), M (el que la tenía puesta) o MT (ambos).
+    'direction' es la del que toma: si vende y lo liquidan, era un largo. El que tenía la orden va al revés.
+    'amount' viene en USD en el perpetuo."""
+    params = msg.get("params") or {}
+    if msg.get("method") != "subscription" or not str(params.get("channel", "")).startswith("trades."):
+        return []
+    out = []
+    for t in params.get("data") or []:
+        liq = t.get("liquidation")
+        if not liq or t.get("instrument_name") != DERIBIT_INST:
+            continue
+        usd, px = float(t.get("amount") or 0), float(t.get("price") or 0)
+        if usd <= 0 or px <= 0:
+            continue
+        taker_side = 1 if t.get("direction") == "sell" else -1      # quien toma vendiendo cierra un largo
+        sides = []
+        if "T" in liq:
+            sides.append(taker_side)
+        if "M" in liq:
+            sides.append(-taker_side)
+        mkt = float(t.get("mark_price") or px)
+        for side in sides:
+            out.append(_ev(int(t.get("timestamp") or 0), "deribit", side, px, mkt, usd / mkt))
+    return out
+
+
+BITMEX_SYMBOL = os.getenv("BITMEX_SYMBOL", "XBTUSD")
+
+
+def parse_bitmex(msg):
+    """Tabla liquidation de BitMEX: side=Sell es la orden que vende un largo liquidado.
+    En XBTUSD cada contrato vale 1 USD (leavesQty = USD). Solo se cuenta la aparición (insert)."""
+    if msg.get("table") != "liquidation" or msg.get("action") != "insert":
+        return []
+    out = []
+    now_ms = int(time.time() * 1000)
+    for x in msg.get("data") or []:
+        if x.get("symbol") != BITMEX_SYMBOL:
+            continue
+        usd, px = float(x.get("leavesQty") or 0), float(x.get("price") or 0)
+        if usd <= 0 or px <= 0:
+            continue
+        side = 1 if x.get("side") == "Sell" else -1
+        mk = _mark_near(now_ms) or px
+        out.append(_ev(now_ms, "bitmex", side, px, mk, usd / mk))
+    return out
+
+
 # ───────────── Recolectores ─────────────
 class WSCollector(threading.Thread):
     def __init__(self, ex, url, parser, subscribe=None, ping_text=None, ping_every=20):
@@ -342,6 +394,13 @@ def start():
                 ping_text=json.dumps({"op": "ping"})).start()
     WSCollector("okx", "wss://ws.okx.com:8443/ws/v5/public", parse_okx,
                 subscribe={"op": "subscribe", "args": [{"channel": "liquidation-orders", "instType": "SWAP"}]},
+                ping_text="ping", ping_every=25).start()
+    WSCollector("deribit", "wss://www.deribit.com/ws/api/v2", parse_deribit,
+                subscribe={"jsonrpc": "2.0", "id": 1, "method": "public/subscribe",
+                           "params": {"channels": [f"trades.{DERIBIT_INST}.100ms"]}},
+                ping_text=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "public/test", "params": {}}),
+                ping_every=25).start()
+    WSCollector("bitmex", f"wss://ws.bitmex.com/realtime?subscribe=liquidation:{BITMEX_SYMBOL}", parse_bitmex,
                 ping_text="ping", ping_every=25).start()
     threading.Thread(target=_maintenance, daemon=True, name="liq-maint").start()
 
