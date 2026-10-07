@@ -20,6 +20,7 @@ y comprobado contra liquidaciones **reales** de 5 exchanges. No es una señal de
   salen finísimas, lo normal es dejarlo vacío = automático) e intensidad.
 - **⚙ Capas**: Perfil, Paneles, Calor/Lado, Zonas (rótulos en el eje), Asia (rango y barridos), Liq (burbujas), Libro (muros del libro).
 - **✓ Validez**: acierto del heatmap frente al azar, calibración, fuentes, funding y ratio largos/cortos.
+  Con la clave de CoinGlass puesta, también qué partes de su API deja usar tu plan.
 
 ## Cómo se estima
 - OI sube en una vela: entran largos y cortos por la misma cantidad al precio típico (máx + mín + cierre) / 3,
@@ -44,6 +45,7 @@ y comprobado contra liquidaciones **reales** de 5 exchanges. No es una señal de
 | DATA_DIR | carpeta de la base de datos | ./data |
 | ACCESS_KEY | si se pone, la web se abre con `/?k=CLAVE` | — |
 | TELEGRAM_TOKEN / TELEGRAM_CHAT_ID | alertas de zona cercana y barrido de Asia | — |
+| COINGLASS_API_KEY | clave de CoinGlass: se comprueba cada 6 h qué deja usar el plan (su API es de pago; el heatmap y el mapa solo con Professional) | — |
 | ALERT_TF · ALERT_DIST_PCT · ALERT_MIN_RATIO · ALERT_COOLDOWN_MIN | ajustes de las alertas | 15m · 0.4 · 0.6 · 60 |
 | ASIA_START_UTC / ASIA_END_UTC | rango asiático en hora UTC | 0 y 7 |
 | OI_SOURCES | fuentes de OI activas, separadas por comas | todas |
@@ -61,6 +63,6 @@ y comprobado contra liquidaciones **reales** de 5 exchanges. No es una señal de
 | `/api/live?after=CURSOR` | liquidaciones reales nuevas (para el directo) |
 | `/api/validate?tf=5m` | acierto del heatmap frente al azar |
 | `/api/calibrate` | fuerza una calibración (una cada 10 min) |
-| `/api/status` | estado de los recolectores y de la base de datos |
+| `/api/status` | estado de los recolectores, de la base de datos y de la clave de CoinGlass |
 | `/api/test-alert` | mensaje de prueba a Telegram |
 | `/health` | ok |

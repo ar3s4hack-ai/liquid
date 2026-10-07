@@ -911,6 +911,22 @@ bCfg.onclick = () => {
 // ───── validez: comparación con liquidaciones reales
 const MODEL_LABEL = { auto: 'Auto (calibrado)', oi: 'Open Interest (tus ajustes)', vol: 'Volumen' };
 function pct(x) { return x === null || x === undefined ? '–' : Math.round(x * 100) + '%'; }
+function esc(x) { return String(x).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
+const CG_ADDS = { Professional: 'su heatmap y su mapa de liquidaciones, para compararlos con el nuestro',
+  Standard: 'órdenes de liquidación con precio de 7 días y más exchanges', Startup: 'poco: datos por vela desde 30m', Hobbyist: 'nada nuevo: datos por vela de 4h o más' };
+function cgBlock(g) {
+  // solo aparece si hay COINGLASS_API_KEY en el servidor
+  if (!g) return '';
+  let head;
+  if (!g.checked) head = '<div class="muted">Comprobando la clave…</div>';
+  else if (!g.plan) head = `<div class="warn">Tu clave no da acceso a la API${g.reason ? ': «' + esc(g.reason) + '»' : '.'}</div>
+    <div class="muted">La API de CoinGlass es de pago (desde 29 $/mes); con la cuenta gratis no da datos.</div>`;
+  else head = `<div>Plan detectado: <b>${esc(g.plan)}</b> · se podría añadir: ${CG_ADDS[g.plan] || '–'}</div>`;
+  const when = g.checked ? new Date(g.checked * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '';
+  return `<h4>CoinGlass</h4>${head}
+    <div>${(g.checks || []).map(c => `${c.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'} ${esc(c.name)}`).join(' · ')}</div>
+    ${when ? `<div class="muted">Comprobado a las ${when} · se repite cada 6 h.</div>` : ''}`;
+}
 function times(x) { return x === null || x === undefined ? '–' : x.toFixed(1).replace('.', ',') + '×'; }
 function verdict(lift) {
   if (lift === null || lift === undefined) return '<span class="muted">sin datos</span>';
@@ -964,6 +980,7 @@ function renderVal(v) {
   parts.push(`<h4>Recogida de liquidaciones reales</h4>
     <div>${['binance', 'bybit', 'okx', 'deribit', 'bitmex'].map(ex => `${dot(col[ex])} ${EX_NAME[ex]}`).join(' · ')}</div>
     <div class="muted">Guardadas: ${(v.db && v.db.events) || 0} · escuchando ${String((v.db && v.db.hours_listening) || 0).replace('.', ',')} h en total</div>
+    ${cgBlock(v.coinglass)}
     <h4>Cómo leerlo</h4>
     <div class="muted">Acierto: % del dinero liquidado que cayó en una zona que el heatmap ya marcaba antes. Azar: lo que se acertaría con un precio cualquiera cercano. Burbuja <span class="L">naranja</span> = largos liquidados, <span class="S">cian</span> = cortos. Binance solo envía una muestra (1 por segundo).</div>`);
   valEl.innerHTML = parts.join('');

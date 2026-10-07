@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 from flask import Flask, jsonify, request, send_from_directory
 
+import cg as CG
 import liqdata as LQ
 
 app = Flask(__name__, static_folder="static")
@@ -991,6 +992,7 @@ LQ.start()
 if os.getenv("COLLECT", "1") != "0":
     threading.Thread(target=calib_loop, daemon=True, name="calib").start()
     threading.Thread(target=snapshot_loop, daemon=True, name="oi-snap").start()
+    CG.start()   # solo si hay COINGLASS_API_KEY: comprueba qué deja usar el plan
 
 
 # ───────────── Rutas ─────────────
@@ -1039,7 +1041,7 @@ def api_validate():
     except ValueError:
         return jsonify({"error": "lev no válido"}), 400
     try:
-        return jsonify(get_validation(tf, levs))
+        return jsonify(dict(get_validation(tf, levs), coinglass=CG.summary()))
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -1066,7 +1068,8 @@ def api_status():
         db = LQ.db_counts()
     except Exception as e:
         db = {"error": str(e)[:120]}
-    return jsonify({"collectors": LQ.status(), "db": db, "mark": LQ.MARK, "data_dir": LQ.DATA_DIR})
+    return jsonify({"collectors": LQ.status(), "db": db, "mark": LQ.MARK, "data_dir": LQ.DATA_DIR,
+                    "coinglass": CG.summary(detail=True)})
 
 
 @app.route("/api/live")
