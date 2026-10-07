@@ -871,7 +871,10 @@ def run_validation(tf, levs):
         size = price * BIN_PCT / 100
         hheat, htouch, since = HL.build_heat(candles, step, size, price, RANGE_BY_TF.get(tf, RANGE_PCT))
         if since is not None and hheat["segments"]:
-            res["models"]["hl"] = LQ.validate(candles, step, hheat, htouch, events, covered)
+            # solo desde que se graba: antes no había mapa real con el que comparar
+            ev_h = [e for e in events if e["ts"] >= since * 1000]
+            res["models"]["hl"] = LQ.validate(candles, step, hheat, htouch, ev_h, {m for m in covered if m >= since})
+            res["models"]["hl"]["since"] = since
         if est is not None:
             res["hl_compare"] = compare_real(est, HL.levels(price, est["size"], RANGE_BY_TF.get(tf, RANGE_PCT)), price)
     except Exception as e:
@@ -1261,6 +1264,16 @@ def cz_status():
         evs = [e for e in LQ.events_between(now - 86400, now) if e["ex"] == "binance"]
         ours = [round(sum(e["usd"] for e in evs if e["side"] == s)) for s in (1, -1)]
         st["check_binance_24h"] = {"coinalyze": cz, "nuestro": ours}
+    d5 = CZ.STATE["data"].get("5m")
+    if d5 and m:
+        # última hora vela a vela: si Coinalyze ve liquidaciones de Binance y nosotros no, nuestro lector falla
+        now = time.time()
+        series = d5["liq"].get(m["symbol"]) or {}
+        evs = [e for e in LQ.events_between(now - 3600, now) if e["ex"] == "binance"]
+        ours = defaultdict(float)
+        for e in evs:
+            ours[(e["ts"] // 1000) // 300 * 300] += e["usd"]
+        st["check_binance_1h"] = [[t, round(sum(series[t])), round(ours.get(t, 0))] for t in sorted(series) if t >= now - 3600]
     return st
 
 

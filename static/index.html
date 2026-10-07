@@ -1063,7 +1063,9 @@ function hlBlock(v) {
   if (!h.positions) out.push(`<div class="muted">Buscando posiciones… (${h.tracked || 0} direcciones en cola)</div>`);
   else out.push(`<div><b>${h.positions}</b> posiciones de BTC con su precio de liquidación exacto · largos <b>${pct(h.long_pct)}</b>` +
     (h.coverage ? ` · cubren el <b>${pct(h.coverage)}</b> del OI de Hyperliquid` : '') + '</div>');
-  if (c) out.push(`<div>¿El mapa estimado marca dónde están? <b>${pct(c.match)}</b> <span class="muted">(azar: ${pct(c.base)})</span> · ${verdict(c.lift)}</div>`);
+  if (c && c.usd >= 5e6) out.push(`<div>¿El mapa estimado marca dónde están? <b>${pct(c.match)}</b> <span class="muted">(azar: ${pct(c.base)})</span> · ${verdict(c.lift)}</div>` +
+    `<div class="muted">Con ${fmtM(c.usd)} de liquidaciones reales cerca del precio.</div>`);
+  else if (c) out.push(`<div class="muted">Aún hay poco real cerca del precio (${fmtM(c.usd || 0)}) para comparar con el mapa estimado.</div>`);
   out.push('<div class="muted">Solo Hyperliquid (no todo el mercado), pero son posiciones reales, no estimadas. Capa «HL» y modelo «Hyperliquid real» en ⚙.</div>');
   return out.join('');
 }
@@ -1097,7 +1099,9 @@ function renderVal(v) {
     parts.push(`<h4>Modelo ${MODEL_LABEL[m] || m}</h4>
       <div>Acierto: <b>${pct(r.hit)}</b> <span class="muted">(azar: ${pct(r.base)})</span><br>${verdict(r.lift)}</div>
       <div>Zonas fuertes tocadas con liquidación real: <b>${pct(r.prec)}</b> <span class="muted">(azar: ${pct(r.prec_base)})</span> · ${verdict(r.prec_lift)}</div>
-      <div class="muted">${r.events} liquidaciones · ${fmtM(r.usd || 0)} USD · ${r.touches} zonas tocadas · margen ±${r.tol_points} pts</div>`);
+      <div class="muted">${r.events} liquidaciones · ${fmtM(r.usd || 0)} USD · ${r.touches} zonas tocadas · margen ±${r.tol_points} pts` +
+      (r.since ? ` · grabando desde ${new Date(r.since * 1000).toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : '') + '</div>' +
+      (r.enough ? '' : '<div class="warn">Aún pocos datos para este modelo.</div>'));
   }
   if (best && anyM && anyM.enough) parts.push(`<div style="margin-top:6px">Ahora acierta más: <b>${MODEL_LABEL[best[0]]}</b></div>`);
   const cb = v.calib;
