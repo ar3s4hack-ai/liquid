@@ -1,8 +1,9 @@
 import math
-from collections import defaultdict, deque
 import os
 import threading
 import time
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from flask import Flask, jsonify, request, send_from_directory
@@ -20,14 +21,12 @@ except ImportError:  # pragma: no cover
 SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
 FAPI = os.getenv("BINANCE_FAPI", "https://fapi.binance.com")
 BYBIT = os.getenv("BYBIT_BASE", "https://api.bybit.com")
-USE_BYBIT = os.getenv("USE_BYBIT", "1") == "1"
-ENABLED_SOURCES = set(os.getenv("OI_SOURCES", "binance_usdc,binance_coinm,okx_usdt,okx_usd,hyperliquid,bitget,deribit,bitmex").split(","))
+# Fuentes de Open Interest: las 6 primeras tienen histórico; las 4 últimas se graban cada minuto en la base de datos
+ALL_SOURCES = ("binance", "bybit", "binance_usdc", "binance_coinm", "okx_usdt", "okx_usd",
+               "hyperliquid", "bitget", "deribit", "bitmex")
+ENABLED_SOURCES = set(os.getenv("OI_SOURCES", ",".join(ALL_SOURCES)).split(","))
 EX_GROUPS = {"binance": ["binance", "binance_usdc", "binance_coinm"], "bybit": ["bybit"], "okx": ["okx_usdt", "okx_usd"],
              "deribit": ["deribit"], "bitmex": ["bitmex"], "hyperliquid": ["hyperliquid"], "bitget": ["bitget"]}
-
-CG_KEY = os.getenv("COINGLASS_API_KEY", "").strip()
-CG_BASE = os.getenv("COINGLASS_BASE", "https://open-api-v4.coinglass.com")
-CG_EXCHANGE = os.getenv("CG_EXCHANGE", "Binance")
 
 ACCESS_KEY = os.getenv("ACCESS_KEY", "").strip()
 CACHE_TTL = int(os.getenv("CACHE_TTL", "60"))
@@ -43,16 +42,18 @@ ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN_MIN", "60")) * 60
 ASIA_START = int(os.getenv("ASIA_START_UTC", "0"))
 ASIA_END = int(os.getenv("ASIA_END_UTC", "7"))
 
-CANDLES = {"5m": 900, "15m": 800, "1h": 600, "4h": 300, "1d": 300}
+# Binance solo guarda 30 días de Open Interest: en 4h y 1D no tiene sentido pedir muchas más velas
+CANDLES = {"5m": 900, "15m": 800, "1h": 600, "4h": 240, "1d": 120}
 RANGE_BY_TF = {"5m": 8.0, "15m": 10.0, "1h": 15.0, "4h": 35.0, "1d": 40.0}
 TF_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 BYBIT_IV = {"5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1d"}
-CG_RANGE = {"5m": "24h", "15m": "3d", "1h": "7d", "4h": "30d", "1d": "30d"}
 
 ALL_TIERS = [3, 5, 10, 25, 50, 100]
 TIER_W = {3: 0.08, 5: 0.12, 10: 0.22, 25: 0.28, 50: 0.18, 100: 0.12}
-MODELS = ("auto", "oi", "vol", "cg")
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "cg" if CG_KEY else "auto")
+MODELS = ("auto", "oi", "vol")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "auto")
+if DEFAULT_MODEL not in MODELS:
+    DEFAULT_MODEL = "auto"
 # Modelo: entrada al precio típico, envejecimiento (vida media en horas), filtro de picos (z, 0 = apagado)
 # y cierre de posiciones cuando baja el Open Interest.
 # Por defecto, como Hyblock / Trading Different: un nivel vive hasta que el precio lo toca
@@ -68,10 +69,23 @@ _lock = threading.Lock()
 
 
 # ───────────── Datos de mercado ─────────────
-def get_json(url, params=None, headers=None):
-    r = requests.get(url, params=params, headers=headers, timeout=15)
-    r.raise_for_status()
-    return r.json()
+_http = requests.Session()
+
+
+def get_json(url, params=None, headers=None, tries=2):
+    """GET con la conexión reutilizada y un reintento si se corta o el servidor da 5xx (no en 4xx)."""
+    for k in range(tries):
+        try:
+            r = _http.get(url, params=params, headers=headers, timeout=15)
+            if r.status_code >= 500 and k + 1 < tries:
+                time.sleep(0.4)
+                continue
+            r.raise_for_status()
+            return r.json()
+        except (requests.ConnectionError, requests.Timeout):
+            if k + 1 >= tries:
+                raise
+            time.sleep(0.4)
 
 
 def fetch_current_price():
@@ -80,10 +94,16 @@ def fetch_current_price():
     return float(data["price"])
 
 
+_candle_cache = {}
+
+
 def fetch_candles(tf, limit=None):
     limit = limit or CANDLES[tf]
+    hit = _candle_cache.get((tf, limit))
+    if hit and time.time() - hit[0] < 15:
+        return [dict(c) for c in hit[1]]
     rows = get_json(f"{FAPI}/fapi/v1/klines", {"symbol": SYMBOL, "interval": tf, "limit": min(limit, 1500)})
-    return [
+    out = [
         {
             "time": int(r[0] // 1000),
             "open": float(r[1]),
@@ -95,6 +115,8 @@ def fetch_candles(tf, limit=None):
         }
         for r in rows
     ]
+    _candle_cache[(tf, limit)] = (time.time(), out)
+    return [dict(c) for c in out]
 
 
 def fetch_oi_binance(tf, limit=None):
@@ -203,51 +225,58 @@ def align_oi(candles, oi, step):
     return {t + best: v for t, v in oi.items()}
 
 
+_pool = ThreadPoolExecutor(max_workers=6)
+
+
 def load_sources(tf, candles, groups=None):
+    """Open Interest en USD por vela de cada fuente activa. Las descargas van en paralelo;
+    si una fuente falla, el resto sigue y el fallo se anota."""
     step = TF_SECONDS[tf]
-    sources, errors = {}, []
     want = None if not groups else {s for g in groups for s in EX_GROUPS.get(g, [])}
-
-    def ok(name):
-        return want is None or name in want
-
-    if ok("binance"):
+    hist = {
+        "binance": lambda: fetch_oi_binance(tf),
+        "bybit": lambda: fetch_oi_bybit(tf),               # en BTC: se pasa a USD abajo
+        "binance_usdc": lambda: fetch_oi_binance_usdc(tf),
+        "binance_coinm": lambda: fetch_oi_binance_coinm(tf),
+        "okx_usdt": lambda: fetch_oi_okx("BTC-USDT-SWAP", tf),
+        "okx_usd": lambda: fetch_oi_okx("BTC-USD-SWAP", tf),
+    }
+    names = [n for n in ALL_SOURCES if n in ENABLED_SOURCES and (want is None or n in want)]
+    futures = {n: _pool.submit(hist[n]) for n in names if n in hist}
+    px = {c["time"]: c["close"] for c in candles}
+    sources, errors = {}, []
+    for name in names:
         try:
-            sources["binance"] = align_oi(candles, fetch_oi_binance(tf), step)
-        except Exception as e:
-            errors.append(f"OI Binance: {e}")
-    if USE_BYBIT and ok("bybit"):
-        try:
-            raw = align_oi(candles, fetch_oi_bybit(tf), step)
-            px = {c["time"]: c["close"] for c in candles}
-            sources["bybit"] = {t: v * px[t] for t, v in raw.items() if t in px}
-        except Exception as e:
-            errors.append(f"OI Bybit: {e}")
-    extra = (
-        ("binance_usdc", lambda: fetch_oi_binance_usdc(tf)),
-        ("binance_coinm", lambda: fetch_oi_binance_coinm(tf)),
-        ("okx_usdt", lambda: fetch_oi_okx("BTC-USDT-SWAP", tf)),
-        ("okx_usd", lambda: fetch_oi_okx("BTC-USD-SWAP", tf)),
-    )
-    for name, fn in extra:
-        if name not in ENABLED_SOURCES or not ok(name):
-            continue
-        try:
-            data = align_oi(candles, fn(), step)
-            if len(data) >= 3:
-                sources[name] = data
-        except Exception as e:
-            errors.append(f"OI {name}: {str(e)[:60]}")
-    for name in ("hyperliquid", "bitget", "deribit", "bitmex"):
-        if name not in ENABLED_SOURCES or not ok(name):
-            continue
-        try:
-            data = LQ.oi_snapshots(name, candles, step)
+            if name in hist:
+                data = align_oi(candles, futures[name].result(timeout=40), step)
+                if name == "bybit":
+                    data = {t: v * px[t] for t, v in data.items() if t in px}
+            else:
+                data = LQ.oi_snapshots(name, candles, step)
             if len(data) >= 3:
                 sources[name] = data
         except Exception as e:
             errors.append(f"OI {name}: {str(e)[:60]}")
     return sources, errors
+
+
+def oi_summary(sources, candles, step):
+    """OI total en USD (suma de fuentes al día) y su cambio en 24 h con las fuentes que tienen ambos datos."""
+    last_t = candles[-1]["time"]
+    total = prev = matched = 0.0
+    n = 0
+    for data in sources.values():
+        if not data:
+            continue
+        t = max(data)
+        if last_t - t > 2 * step:      # fuente atrasada: no cuenta
+            continue
+        total += data[t]
+        n += 1
+        if t - 86400 in data:
+            prev += data[t - 86400]
+            matched += data[t]
+    return {"usd": round(total), "n": n, "chg24": round((matched / prev - 1) * 100, 2) if prev else None}
 
 
 # ───────────── Zonas (agrupa niveles vecinos) ─────────────
@@ -284,37 +313,6 @@ def cluster_zones(active, price, top=6):
     for z in zones:
         z["ratio"] = round(z["total"] / top_total, 3) if top_total else 0
     return zones
-
-
-def cluster_bands(active, price, size, top=15):
-    """Agrupa niveles vecinos en bandas para la vista limpia: (precio, L, S, inicio)."""
-    if not active:
-        return []
-    gap = price * ZONE_GAP_PCT / 100
-    pts = sorted(active)
-    groups, cur = [], [pts[0]]
-    for a in pts[1:]:
-        if a[0] - cur[-1][0] <= gap and a[0] - cur[0][0] <= 3 * gap:
-            cur.append(a)
-        else:
-            groups.append(cur)
-            cur = [a]
-    groups.append(cur)
-    bands = []
-    for g in groups:
-        L = sum(a[1] for a in g)
-        S = sum(a[2] for a in g)
-        tot = L + S
-        if tot <= 0:
-            continue
-        t0 = sum(a[3] * (a[1] + a[2]) for a in g) / tot
-        bands.append({
-            "lo": round(g[0][0] - size / 2, 2), "hi": round(g[-1][0] + size / 2, 2),
-            "price": round(sum(a[0] * (a[1] + a[2]) for a in g) / tot, 2),
-            "t0": int(t0), "L": round(L), "S": round(S), "total": round(tot),
-        })
-    bands.sort(key=lambda b: -b["total"])
-    return bands[:top]
 
 
 # ───────────── Estimación del heatmap con tiempo ─────────────
@@ -379,6 +377,7 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
     prev = {}
     touches = defaultdict(float)
     pos_hist = deque(maxlen=96)
+    doi = []
 
     def k_of(side):
         return 0 if side == 1 else 1
@@ -454,6 +453,7 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
                     add(entry * (1 + 1 / lev - MMR), amount * w * (1 - s_buy), -1, lev, touched)
         else:
             d = oi_delta(sources, prev, c["time"])
+            doi.append(d)
             if d is not None and d > 0:
                 ok = True
                 if P.get("spike_z", 0) > 0:
@@ -490,14 +490,12 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
 
     tidx = {c["time"]: i for i, c in enumerate(candles)}
     active = []
-    starts = []
     for b, (i0, mL, mS) in opened.items():
         pr = round((b + 0.5) * size, 2)
         segs.append([pr, candles[i0]["time"], candles[-1]["time"], round(mL), round(mS)])
         L, S = mL * FL[-1], mS * FS[-1]
         tiers_v = [max(0.0, tv[b][0][t] * FL[-1] + tv[b][1][t] * FS[-1]) for t in range(nt)]
         active.append((pr, L, S, [round(x) for x in tiers_v]))
-        starts.append((pr, L, S, candles[i0]["time"]))
 
     def seg_value(sg):
         j = tidx.get(sg[2], n - 1)
@@ -508,52 +506,17 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
     vmax_abs = totals[-1] if totals else 0
     zones = cluster_zones(active, price)
     heat = {
-        "mode": "time",
         "size": size,
         "max": vmax,
         "max_abs": vmax_abs,
         "segments": segs,
         "F": {"L": [round(x, 6) for x in FL], "S": [round(x, 6) for x in FS]},
         "active": [[p, round(L), round(S), t] for p, L, S, t in sorted(active) if L + S >= 1],
-        "bands": cluster_bands(starts, price, size),
-        "params": P,
     }
     if out is not None:
         out["touches"] = dict(touches)
+        out["doi"] = doi
     return heat, zones
-
-
-# ───────────── Coinglass (opcional, planes de pago) ─────────────
-def coinglass_heat(tf, price):
-    r = get_json(
-        f"{CG_BASE}/api/futures/liquidation/heatmap/model2",
-        {"exchange": CG_EXCHANGE, "symbol": SYMBOL, "range": CG_RANGE[tf]},
-        {"CG-API-KEY": CG_KEY},
-    )
-    if str(r.get("code")) != "0":
-        raise RuntimeError(f"Coinglass: {r.get('msg', 'error')}")
-    d = r["data"]
-    ys = [float(y) for y in d["y_axis"]]
-    cells = d["liquidation_leverage_data"]
-    if not cells or len(ys) < 2:
-        return {"mode": "static", "size": price * BIN_PCT / 100, "max": 0, "bins": [], "active": []}
-    size = abs(ys[1] - ys[0])
-    max_x = max(c[0] for c in cells)
-    latest = {}
-    for x, y, v in cells:
-        if x >= max_x - 2 and (y not in latest or x > latest[y][0]):
-            latest[y] = (x, float(v))
-    bins = []
-    for y, (_, v) in sorted(latest.items()):
-        if 0 <= y < len(ys) and abs(ys[y] - price) / price * 100 <= RANGE_PCT:
-            bins.append({"price": ys[y], "value": v})
-    vmax = max((b["value"] for b in bins), default=0)
-    active = [[b["price"], b["value"] if b["price"] < price else 0, b["value"] if b["price"] >= price else 0, None] for b in bins]
-    return {"mode": "static", "size": size, "max": vmax, "bins": bins, "active": active}
-
-
-def zones_from_bins(heat, price):
-    return cluster_zones([tuple(a[:3]) for a in heat["active"]], price)
 
 
 # ───────────── Rango asiático y barridos ─────────────
@@ -657,46 +620,36 @@ def calib_params():
 def build(tf, model, levs, bin_pct=None, groups=None):
     candles = fetch_candles(tf)
     price = candles[-1]["close"]
+    step = TF_SECONDS[tf]
     notes, used = [], []
-    heat = zones = None
-    source = "estimado"
-    if model == "cg":
-        if not CG_KEY:
-            notes.append("Sin clave de Coinglass; usando OI")
-            model = "oi"
+    calib = calib_params() if model == "auto" else None
+    tiers = tiers_from(levs)
+    params = {}
+    if model == "auto":
+        if calib:
+            p = calib["params"]
+            tiers = tiers_from(p["tiers"])
+            params = {"half_life_h": p.get("half_life_h"), "spike_z": p.get("spike_z", 0.0),
+                      "close_on_drop": p.get("close_on_drop", False)}
         else:
-            try:
-                heat = coinglass_heat(tf, price)
-                zones = zones_from_bins(heat, price)
-                source, used = "coinglass", ["coinglass"]
-            except Exception as e:
-                notes.append(f"Coinglass falló ({e})")
-                model = "oi"
-    calib = None
-    if heat is None:
-        tiers = tiers_from(levs)
-        params = None
-        if model == "auto":
-            calib = calib_params()
-            if calib:
-                tiers = tiers_from(calib["params"]["tiers"])
-                params = {"half_life_h": calib["params"].get("half_life_h"), "spike_z": calib["params"].get("spike_z", 0.0),
-                          "close_on_drop": calib["params"].get("close_on_drop", False)}
-            else:
-                tiers = tiers_from([25, 50, 100])   # sin calibrar: los pools estándar 25X+50X+100X
-        params = dict(params or {}, range_pct=RANGE_BY_TF.get(tf, RANGE_PCT))
-        if bin_pct:
-            params["bin_pct"] = bin_pct
-        if model == "vol":
-            heat, zones = estimate_heat(candles, {}, price, tiers, "vol", params={"bin_pct": bin_pct, "range_pct": params["range_pct"]})
-            used = ["volumen"]
-        else:
-            sources, errs = load_sources(tf, candles, groups)
-            notes += errs
-            if not sources:
-                raise RuntimeError("; ".join(notes) or "sin datos de Open Interest")
-            heat, zones = estimate_heat(candles, sources, price, tiers, "oi", params=params)
-            used = list(sources)
+            tiers = tiers_from([25, 50, 100])   # sin calibrar: los pools estándar 25X+50X+100X
+    params["range_pct"] = RANGE_BY_TF.get(tf, RANGE_PCT)
+    if bin_pct:
+        params["bin_pct"] = bin_pct
+    out = {}
+    oi = None
+    if model == "vol":
+        heat, zones = estimate_heat(candles, {}, price, tiers, "vol", out=out, params=params)
+        used = ["volumen"]
+    else:
+        sources, errs = load_sources(tf, candles, groups)
+        notes += errs
+        if not sources:
+            raise RuntimeError("; ".join(notes) or "sin datos de Open Interest")
+        heat, zones = estimate_heat(candles, sources, price, tiers, "oi", out=out, params=params)
+        used = list(sources)
+        oi = oi_summary(sources, candles, step)
+    doi = [[c["time"], round(d)] for c, d in zip(candles, out.get("doi") or []) if d is not None]
     try:
         c15 = candles if tf == "15m" else fetch_candles("15m", 300)
         asia = asia_info(c15)
@@ -707,13 +660,12 @@ def build(tf, model, levs, bin_pct=None, groups=None):
         "symbol": SYMBOL,
         "tf": tf,
         "model": model,
-        "models": ["auto", "oi", "vol"] + (["cg"] if CG_KEY else []),
+        "models": list(MODELS),
         "exchanges": list(EX_GROUPS),
         "ex": list(groups) if groups else [],
-        "levs": [l for l, _ in tiers] if heat.get("mode") == "time" else [],
+        "levs": [l for l, _ in tiers],
         "calib": ({"lift": calib.get("lift"), "events": calib.get("events"), "params": calib.get("params"), "updated": calib.get("updated")}
                   if calib else ({"status": "pendiente"} if model == "auto" else None)),
-        "source": source,
         "used": used,
         "note": "; ".join(notes) or None,
         "updated": int(time.time()),
@@ -721,11 +673,12 @@ def build(tf, model, levs, bin_pct=None, groups=None):
         "candles": [{k: c[k] for k in ("time", "open", "high", "low", "close")} for c in candles],
         "heat": heat,
         "zones": zones,
+        "doi": doi,
+        "oi": oi,
         "asia": asia,
-        "liqs": safe_chart_liqs(candles, TF_SECONDS[tf]),
+        "liqs": safe_chart_liqs(candles, step),
         "book": safe_book(price),
         "ctx": market_context(),
-        "collectors": LQ.status(),
     }
 
 
@@ -740,7 +693,7 @@ def safe_chart_liqs(candles, step):
     try:
         return LQ.chart_liqs(candles, step)
     except Exception as e:
-        return {"items": [], "error": str(e)[:120]}
+        return {"items": [], "hist": [], "rowid": 0, "error": str(e)[:120]}
 
 
 def norm_args(model, levs):
@@ -1054,7 +1007,7 @@ def api_data():
         return jsonify({"error": "tf no válido"}), 400
     model = request.args.get("model", "")
     try:
-        levs = [int(x) for x in request.args.get("lev", "").split(",") if x.strip()]
+        levs = parse_levs()
     except ValueError:
         return jsonify({"error": "lev no válido"}), 400
     try:
@@ -1116,14 +1069,20 @@ def api_status():
     return jsonify({"collectors": LQ.status(), "db": db, "mark": LQ.MARK, "data_dir": LQ.DATA_DIR})
 
 
-@app.route("/api/price")
-def api_price():
+@app.route("/api/live")
+def api_live():
+    """Liquidaciones reales nuevas de los 5 exchanges desde el cursor «after» (la web pregunta cada pocos segundos)."""
     if not authorized():
         return jsonify({"error": "clave de acceso incorrecta"}), 401
     try:
-        return jsonify({"symbol": SYMBOL, "price": fetch_current_price(), "updated": int(time.time())})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        after = int(request.args.get("after", "0") or 0)
+    except ValueError:
+        return jsonify({"error": "after no válido"}), 400
+    evs, cursor = LQ.events_after(after)
+    return jsonify({
+        "cursor": cursor,
+        "events": [[e["rowid"], e["ts"], e["ex"], e["side"], round(e["mkt"] or e["price"], 1), round(e["usd"])] for e in evs],
+    })
 
 
 @app.route("/api/test-alert")

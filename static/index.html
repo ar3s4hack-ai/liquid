@@ -31,16 +31,29 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 #val .big{font-size:15px;font-weight:700}
 #val .ok{color:#26a69a}#val .warn{color:#FFD60A}#val .bad{color:#ef5350}
 #val .muted{color:#7f8aa3;font-size:11px}
-#hdr{position:absolute;left:10px;top:8px;z-index:6;font-size:12px;color:#c9c9c9;letter-spacing:.2px;pointer-events:none;text-shadow:0 0 3px #000}
-#zones{position:absolute;left:8px;bottom:36px;z-index:6;background:rgba(11,14,20,.85);border:1px solid #2b3550;border-radius:8px;padding:6px 8px;font-size:12px;line-height:1.5;max-width:75%}
+#info{position:absolute;left:10px;top:8px;z-index:6;max-width:calc(100% - 110px);pointer-events:none;text-shadow:0 0 3px #000}
+#hdr{font-size:12px;color:#c9c9c9;letter-spacing:.2px}
+#bias{margin-top:5px;display:flex;flex-wrap:wrap;gap:6px;font-size:12px;pointer-events:auto}
+#bias .b{display:inline-flex;align-items:center;gap:5px;padding:2px 7px;border-radius:5px;background:rgba(11,14,20,.8);border:1px solid #2b3550}
+#bias .mini{display:inline-block;width:56px;height:6px;border-radius:3px;background:#ff9f1c;overflow:hidden}
+#bias .mini i{display:block;height:100%;background:#2ec4ff}
+#toasts{position:absolute;right:8px;bottom:46px;z-index:9;display:flex;flex-direction:column;gap:6px;align-items:flex-end;pointer-events:none}
+.toast{background:rgba(11,14,20,.95);border:1px solid #2b3550;border-left:3px solid #ff9f1c;border-radius:8px;padding:6px 10px;font-size:12.5px;line-height:1.35;max-width:290px;animation:tin .25s ease-out;transition:opacity .4s}
+.toast.short{border-left-color:#2ec4ff}
+@keyframes tin{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+.pulse{position:absolute;z-index:4;border-radius:50%;border:2px solid #ff9f1c;pointer-events:none;animation:pulse 1.4s ease-out forwards}
+.pulse.short{border-color:#2ec4ff}
+@keyframes pulse{from{transform:scale(.3);opacity:1}to{transform:scale(2.6);opacity:0}}
+#zones{display:none;margin-top:5px;background:rgba(11,14,20,.85);border:1px solid #2b3550;border-radius:8px;padding:6px 8px;font-size:12px;line-height:1.5;width:max-content;max-width:100%}
 #cfg{position:absolute;right:8px;top:6px;z-index:8;background:rgba(11,14,20,.96);border:1px solid #2b3550;border-radius:10px;padding:10px;font-size:13px;display:none;width:250px}
 #cfg .row{margin-bottom:10px}
 #cfg .lbl{font-size:11px;color:#aab3c5;margin-bottom:4px}
 #cfg button{padding:5px 9px;font-size:13px;margin:0 4px 4px 0}
 #cfg input[type=range]{width:100%}
 .muted2{color:#8b95ab;font-size:11px}
-.L{color:#ff9f1c}.S{color:#2ec4ff}.src-cg{color:#FFD60A}.src-es{color:#7fb0ff}.err{color:#ef5350}.rt{color:#26a69a}
+.L{color:#ff9f1c}.S{color:#2ec4ff}.src{color:#7fb0ff}.err{color:#ef5350}.rt{color:#26a69a}
 .price-live{color:#26a69a;font-weight:700}.price-offline{color:#ef5350;font-weight:700}
+@media (max-width:600px){#hdr{font-size:10.5px}#bias{font-size:11px}#bias .mini{width:40px}#zones{font-size:11px}#pools{font-size:11px}button{padding:5px 8px;font-size:13px}}
 </style>
 </head>
 <body>
@@ -63,6 +76,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
     <label><input type="checkbox" data-pool="100">100X: <span class="pv" data-pv="100">–</span></label>
     <span class="tot">Total: <span id="pTot">–</span></span>
     <span class="cum" id="pCum"></span>
+    <span class="cum" id="pAt"></span>
     <label title="Grosor de cada tramo: ≈ grupo × 5 puntos. Automático = precio / 10.000">Grupo <input type="number" id="pGroup" min="1" max="40" step="0.5" style="width:62px"></label>
     <button id="bAuto" class="tg">Auto</button>
     <span class="grad"></span><input type="range" id="pInt" min="0.3" max="3" step="0.1" title="Intensidad del color">
@@ -71,16 +85,15 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 <div id="wrap">
   <canvas id="heat"></canvas><div id="chart"></div><canvas id="fx"></canvas>
   <div id="val"></div>
-  <div id="hdr"></div><div id="zones"></div>
+  <div id="info"><div id="hdr"></div><div id="bias"></div><div id="zones"></div></div><div id="toasts"></div>
   <div id="cfg">
     <div class="row"><div class="lbl">Vista</div><div id="cView"></div></div>
     <div class="row"><div class="lbl">Capas</div>
-      <button id="bProf" class="tg on">Perfil</button><button id="bMode" class="tg">Calor</button><button id="bZones" class="tg">Zonas</button>
+      <button id="bProf" class="tg on">Perfil</button><button id="bPanes" class="tg">Paneles</button><button id="bMode" class="tg">Calor</button><button id="bZones" class="tg">Zonas</button>
       <button id="bAsia" class="tg">Asia</button><button id="bLiq" class="tg">Liq</button><button id="bBook" class="tg">Libro</button></div>
     <div class="row"><div class="lbl">Exchanges del Open Interest</div><div id="cEx"></div></div>
     <div class="row"><div class="lbl">Modelo</div><div id="cModel"></div></div>
     <div class="row"><div class="lbl">Apalancamientos</div><div id="cLev"></div></div>
-    <div class="row"><div class="lbl">Paleta</div><div id="cPal"></div></div>
     <div class="row"><div class="lbl">Mostrar solo desde: <span id="cMinV"></span>% de la zona más fuerte</div>
       <input type="range" id="cMin" min="0" max="40" step="1"></div>
   </div>
@@ -93,17 +106,22 @@ const ALL = [3, 5, 10, 25, 50, 100];
 const TIER_COL = { 3: '#f472b6', 5: '#a78bfa', 10: '#4f8cff', 25: '#1fd11f', 50: '#f2ea0c', 100: '#e8140c' };
 // vista Pro: 4 colores fijos, de menos a más (turquesa, verde, amarillo, rojo)
 const PRO_COLS = ['#008f8f', '#0fbf0f', '#f0e60a', '#e8100a'];
-const MODEL_NAME = { auto: 'Auto (calibrado)', oi: 'Open Interest', vol: 'Volumen', cg: 'Coinglass' };
+const MODEL_NAME = { auto: 'Auto (calibrado)', oi: 'Open Interest', vol: 'Volumen' };
 const WARM = [[0, 0, 110], [0, 150, 150], [0, 200, 0], [240, 240, 0], [255, 0, 0]];
-const COOL = [[123, 44, 191], [45, 108, 223], [255, 214, 10]];
 
-const CFG_VER = 7;
-let cfg = { ver: CFG_VER, model: 'auto', levs: [25, 50, 100], palette: 'warm', minPct: 24, view: 'pro', book: false, intensity: 1, group: null, ex: [] };
+const CFG_VER = 8;
+let cfg = { ver: CFG_VER, model: 'auto', levs: [25, 50, 100], minPct: 24, view: 'pro', book: false, intensity: 1, group: null, ex: [], panes: true };
 try {
   const saved = JSON.parse(localStorage.getItem('liq_cfg') || '{}');
-  // ajustes de versiones antiguas: se conserva solo la paleta y el mínimo
-  if (saved.ver === CFG_VER) Object.assign(cfg, saved);
-  // versiones antiguas: se empieza de cero con la vista Pro
+  // la v7 se conserva; la paleta fría y la vista «Limpia» ya no existen
+  if (saved.ver === 7 || saved.ver === CFG_VER) {
+    Object.assign(cfg, saved);
+    delete cfg.palette;
+    if (cfg.view !== 'pro' && cfg.view !== 'full') cfg.view = 'pro';
+    if (!MODEL_NAME[cfg.model]) cfg.model = 'auto';
+    if (cfg.panes === undefined) cfg.panes = true;
+    cfg.ver = CFG_VER;
+  }
 } catch (e) {}
 function saveCfg() { try { localStorage.setItem('liq_cfg', JSON.stringify(cfg)); } catch (e) {} }
 
@@ -114,6 +132,9 @@ const ctx = cv.getContext('2d');
 const st = document.getElementById('st');
 const zonesEl = document.getElementById('zones');
 const hdr = document.getElementById('hdr');
+const biasEl = document.getElementById('bias');
+const toastsEl = document.getElementById('toasts');
+const bPanes = document.getElementById('bPanes');
 const cfgEl = document.getElementById('cfg');
 const bMode = document.getElementById('bMode');
 const bAsia = document.getElementById('bAsia');
@@ -131,6 +152,7 @@ let lines = [], lastSig = '', version = 0;
 // Precio real recibido desde Binance (WebSocket)
 let livePrice = null, previousLivePrice = null, ws = null, wsRetry = null, priceLine = null, lastLiveUi = 0;
 let wsLive = false, liveBar = null, showLiq = false, valTimer = null, zoneLines = [], tindex = {};
+let liveCursor = 0, liveBuf = [], liqHist = new Map(), doiMap = new Map(), zoneRange = null, toastBuf = {}, lastZoneLines = 0;
 
 // Hora local del dispositivo (la misma que muestra la app de Binance); los datos siguen en UTC.
 function fmtLocalFull(t) {
@@ -154,8 +176,34 @@ const chart = LightweightCharts.createChart(document.getElementById('chart'), {
 });
 const series = chart.addCandlestickSeries({
   upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
-  wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+  wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  // el encuadre automático incluye las zonas fuertes cercanas, no solo las velas
+  autoscaleInfoProvider: (original) => {
+    const r = original();
+    if (!r || !r.priceRange || !zoneRange) return r;
+    return { priceRange: { minValue: Math.min(r.priceRange.minValue, zoneRange[0]), maxValue: Math.max(r.priceRange.maxValue, zoneRange[1]) }, margins: r.margins };
+  }
 });
+
+// Paneles inferiores: Δ Open Interest por vela y liquidaciones reales por vela (5 exchanges)
+const PANES_BOTTOM = 0.30;
+const DOI_TOP = 0.73, LIQ_TOP = 0.865;
+const histOpts = { priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false };
+const doiSeries = chart.addHistogramSeries({ ...histOpts, priceScaleId: 'doi' });
+const liqLSeries = chart.addHistogramSeries({ ...histOpts, priceScaleId: 'liq', color: 'rgba(255,159,28,0.9)' });
+const liqSSeries = chart.addHistogramSeries({ ...histOpts, priceScaleId: 'liq', color: 'rgba(46,196,255,0.9)' });
+function applyPanes() {
+  series.priceScale().applyOptions({ scaleMargins: cfg.panes ? { top: 0.06, bottom: PANES_BOTTOM + 0.02 } : { top: 0.08, bottom: 0.08 } });
+  chart.priceScale('doi').applyOptions({ scaleMargins: { top: DOI_TOP, bottom: 1 - LIQ_TOP + 0.02 } });
+  chart.priceScale('liq').applyOptions({ scaleMargins: { top: LIQ_TOP, bottom: 0 } });
+  for (const x of [doiSeries, liqLSeries, liqSSeries]) x.applyOptions({ visible: cfg.panes });
+  bPanes.classList.toggle('on', cfg.panes);
+}
+function paneHeight() {
+  const t = chart.timeScale();
+  return wrap.clientHeight - ((t.height && t.height()) || 28);
+}
+function priceBottom() { return cfg.panes ? paneHeight() * (1 - PANES_BOTTOM) : wrap.clientHeight; }
 
 // Línea de precio REAL: se crea con el primer precio conocido (nunca en 0)
 function countdown() {
@@ -191,9 +239,8 @@ function fillFor(ratio, longShare) {
     const a = (0.2 + 0.7 * k).toFixed(2);
     return longShare >= 0.5 ? `rgba(255,159,28,${a})` : `rgba(46,196,255,${a})`;
   }
-  const warm = cfg.palette === 'warm';
-  const [r, g, b] = rampN(warm ? WARM : COOL, k);
-  const a = warm ? 0.4 + 0.58 * k : 0.12 + 0.78 * k;
+  const [r, g, b] = rampN(WARM, k);
+  const a = 0.4 + 0.58 * k;
   return `rgba(${r},${g},${b},${a.toFixed(2)})`;
 }
 
@@ -205,24 +252,22 @@ function signature() {
   return [wrap.clientWidth, wrap.clientHeight,
     series.priceToCoordinate(data.price), series.priceToCoordinate(data.price * 1.01),
     ts.timeToCoordinate(cs[0].time), ts.timeToCoordinate(cs[cs.length - 1].time),
-    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.palette, cfg.minPct, cfg.view, cfg.book, cfg.intensity, version].join('|');
+    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.minPct, cfg.view, cfg.book, cfg.intensity, cfg.panes,
+    Math.round((livePrice ?? data.price) / (data.heat.size || 1)), version].join('|');
 }
 
-function drawTime(w) {
+function drawTime(w, h) {
   const ts = chart.timeScale();
   const bs = ts.options().barSpacing;
   const lastT = data.candles[data.candles.length - 1].time;
   const xLast = ts.timeToCoordinate(lastT);
   const half = data.heat.size / 2;
-  const clean = cfg.view === 'clean';
   const pro = cfg.view === 'pro';
   const max = pro ? proMax() : data.heat.max;
-  if (clean && data.heat.bands) { drawBands(w, ts, bs, xLast); return; }
   const minR = Math.max(0.005, cfg.minPct / 100);
   const FF = data.heat.F || {}, FL = FF.L, FS = FF.S;
   if (!(max > 0) || xLast === null) return;
   for (const [p, t0, t1, mL, mS] of data.heat.segments) {
-    if (clean && t1 < lastT) continue;   // vista limpia: solo lo que sigue vivo
     const j = tindex[t1];
     const L = FL && j !== undefined ? mL * FL[j] : mL;
     const S = FS && j !== undefined ? mS * FS[j] : mS;
@@ -240,7 +285,7 @@ function drawTime(w) {
     ctx.fillStyle = pro ? proColor(ratio, minR, L / (L + S)) : fillFor(ratio, L / (L + S));
     ctx.fillRect(xs, y1, x2 - xs, Math.max(1, y2 - y1));
   }
-  if (pro && bs >= 3) drawStripes(w, ts, bs);
+  if (pro && bs >= 3) drawStripes(w, h, ts, bs);
 }
 
 function proColor(ratio, minR, longShare) {
@@ -249,60 +294,14 @@ function proColor(ratio, minR, longShare) {
   return PRO_COLS[q < 0.25 ? 0 : q < 0.5 ? 1 : q < 0.75 ? 2 : 3];
 }
 
-function drawStripes(w, ts, bs) {
+function drawStripes(w, h, ts, bs) {
   // rayas negras finas entre velas, como en el original
   const cs = data.candles;
-  const h = wrap.clientHeight;
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   for (const c of cs) {
     const x = ts.timeToCoordinate(c.time);
     if (x === null || x < 0 || x > w) continue;
     ctx.fillRect(Math.round(x + bs / 2) - 0.5, 0, 1, h);
-  }
-}
-
-function drawBands(w, ts, bs, xLast) {
-  const bands = data.heat.bands;
-  if (!bands.length || xLast === null) return;
-  const top = bands[0].total;
-  const minR = Math.max(0.12, cfg.minPct / 100);
-  // de la más débil a la más fuerte, para que las fuertes queden encima
-  for (const b of bands.slice().reverse()) {
-    const ratio = b.total / top;
-    if (ratio < minR) continue;
-    const y1 = series.priceToCoordinate(b.hi);
-    const y2 = series.priceToCoordinate(b.lo);
-    if (y1 === null || y2 === null) continue;
-    let x1 = ts.timeToCoordinate(b.t0 - (b.t0 % TFS[tf]));
-    if (x1 === null) x1 = 0;
-    x1 = Math.max(0, x1 - bs / 2);
-    const x2 = xLast + bs / 2;
-    if (x2 <= x1) continue;
-    const hgt = Math.max(2, y2 - y1);
-    ctx.fillStyle = fillFor(ratio, b.L / (b.L + b.S));
-    ctx.fillRect(x1, y1, x2 - x1, hgt);
-    // filo brillante en el precio central de la banda
-    const yc = series.priceToCoordinate(b.price);
-    if (yc !== null && ratio >= 0.35) {
-      ctx.fillStyle = sideMode ? (b.L >= b.S ? '#ffb347' : '#6fd8ff') : 'rgba(255,255,255,0.55)';
-      ctx.fillRect(x1, yc - 0.5, x2 - x1, 1);
-    }
-  }
-}
-
-function drawStatic(w) {
-  const half = data.heat.size / 2;
-  const max = data.heat.max;
-  const minR = Math.max(0.01, cfg.minPct / 100);
-  if (!(max > 0)) return;
-  for (const b of data.heat.bins) {
-    const ratio = b.value / max;
-    if (ratio < minR) continue;
-    const y1 = series.priceToCoordinate(b.price + half);
-    const y2 = series.priceToCoordinate(b.price - half);
-    if (y1 === null || y2 === null) continue;
-    ctx.fillStyle = fillFor(ratio, b.price < data.price ? 1 : 0);
-    ctx.fillRect(0, y1, w, Math.max(1, y2 - y1));
   }
 }
 
@@ -464,6 +463,36 @@ function drawLiqs(w, h) {
   }
 }
 
+function drawPaneFrames(w) {
+  if (!cfg.panes) return;
+  const ph = paneHeight();
+  const yA = ph * (1 - PANES_BOTTOM), yB = ph * (LIQ_TOP - 0.01);   // separadores: precio | ΔOI | liquidaciones
+  fctx.fillStyle = 'rgba(43,53,80,0.9)';
+  fctx.fillRect(0, Math.round(yA), w, 1);
+  fctx.fillRect(0, Math.round(yB), w, 1);
+  fctx.font = '11px system-ui, sans-serif';
+  fctx.fillStyle = '#8b95ab';
+  const noOi = data.model === 'vol';
+  fctx.fillText(noOi ? 'Δ Open Interest (no disponible con el modelo Volumen)' : 'Δ Open Interest · verde: entran posiciones · rojo: salen', 8, yA + 13);
+  fctx.fillText('Liquidaciones reales (5 exchanges) · ▲ cortos  ▼ largos', 8, yB + 13);
+  // el eje de precios no vale para los paneles: se tapa y se pone el máximo visible de cada panel
+  const ps = chart.priceScale('right');
+  const pw = (ps && ps.width && ps.width()) || 62;
+  fctx.fillStyle = '#000';
+  fctx.fillRect(w - pw, yA + 1, pw, ph - yA - 1);
+  fctx.fillStyle = 'rgba(43,53,80,0.9)';
+  fctx.fillRect(w - pw, Math.round(yB), pw, 1);
+  const ts = chart.timeScale(), vr = ts.getVisibleRange && ts.getVisibleRange();
+  const inView = (t) => !vr || (t >= vr.from && t <= vr.to);
+  let mD = 0, mL = 0;
+  for (const [t, v] of doiMap) if (inView(t)) mD = Math.max(mD, Math.abs(v));
+  for (const [t, v] of liqHist) if (inView(t)) mL = Math.max(mL, v[0], v[1]);
+  fctx.fillStyle = '#8b95ab';
+  fctx.font = '10px system-ui, sans-serif';
+  if (mD > 0) fctx.fillText('±' + fmtM(mD), w - pw + 4, yA + 13);
+  if (mL > 0) fctx.fillText(fmtM(mL), w - pw + 4, yB + 13);
+}
+
 function render() {
   requestAnimationFrame(render);
   if (!data) return;
@@ -477,24 +506,33 @@ function render() {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  drawFutureTint(w, h);
-  if (data.heat.mode === 'time') drawTime(w); else drawStatic(w);
+  const yMax = priceBottom();            // el mapa no invade los paneles inferiores
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, yMax); ctx.clip();
+  drawFutureTint(w, yMax);
+  drawTime(w, yMax);
   drawProfile(w);
+  ctx.restore();
   if (fx.width !== cv.width || fx.height !== cv.height) { fx.width = cv.width; fx.height = cv.height; }
   fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   fctx.clearRect(0, 0, w, h);
-  drawLiqs(w, h);
-  drawBook(w, h);
+  fctx.save(); fctx.beginPath(); fctx.rect(0, 0, w, yMax); fctx.clip();
+  drawLiqs(w, yMax);
+  drawBook(w, yMax);
+  fctx.restore();
+  drawPaneFrames(w);
 }
 
 function fmt(x) { return Math.round(x).toLocaleString('es-ES'); }
 function fmtLive(x) { return Number(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function fmtM(x) { return x >= 1e9 ? (x / 1e9).toFixed(2) + 'B' : x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : fmt(x); }
+function fmtM(x) {
+  const a = Math.abs(x), sg = x < 0 ? '−' : '';
+  return sg + (a >= 1e9 ? (a / 1e9).toFixed(2) + 'B' : a >= 1e6 ? (a / 1e6).toFixed(1) + 'M' : a >= 1e4 ? Math.round(a / 1e3) + 'K' : fmt(a));
+}
 
 function updateHeader() {
   if (!data) { hdr.textContent = ''; return; }
   const min = (cfg.minPct / 100) * data.heat.max;
-  if (cfg.view === 'pro' && data.heat.mode === 'time') {
+  if (cfg.view === 'pro') {
     const mxp = proMax();
     const exTxt = data.ex && data.ex.length ? data.ex.map(x => x.toUpperCase()).join('+') : 'todos';
     hdr.textContent = `BINANCE:${data.symbol} · ${tf} · Pools ${data.levs.map(l => l + 'X').join('+')} · Total ≥ ${fmtM((cfg.minPct / 100) * mxp)} · maxHeat ${fmtM(mxp)} · OI: ${exTxt}`;
@@ -502,7 +540,7 @@ function updateHeader() {
   }
   const mname = data.model === 'auto' ? (data.calib && data.calib.params ? 'Auto (calibrado)' : 'Auto (sin calibrar aún)') : (MODEL_NAME[data.model] || data.model);
   const parts = ['BINANCE:' + data.symbol + '.P (perpetuo)', tf + ' · hora local', mname];
-  if (data.model !== 'cg') parts.push('Pools ' + data.levs.map(l => l + 'X').join('+'));
+  parts.push('Pools ' + data.levs.map(l => l + 'X').join('+'));
   parts.push('Total ≥ ' + fmtM(min), 'maxHeat ' + fmtM(data.heat.max));
   hdr.textContent = parts.join(' · ');
 }
@@ -521,28 +559,60 @@ function updateZones() {
 }
 
 function updateZoneLines() {
+  // capa «Zonas»: rótulos en el eje de la zona fuerte más cercana arriba, abajo y la mayor
   zoneLines.forEach(l => series.removePriceLine(l));
   zoneLines = [];
-  if (!data || cfg.view !== 'clean' || !showZones || data.heat.mode !== 'time') return;
+  if (!data || !showZones || !data.zones || !data.zones.length) return;
   const px = livePrice ?? data.price;
-  const bands = (data.heat.bands && data.heat.bands.length) ? data.heat.bands
-    : data.zones.map(z => ({ price: z.price, total: z.total, L: z.side === 'long' ? 1 : 0, S: z.side === 'long' ? 0 : 1 }));
-  if (!bands.length) return;
-  const top = Math.max(...bands.map(b => b.total));
-  const strong = bands.filter(b => b.total / top >= 0.3);
-  const above = strong.filter(b => b.price > px).sort((a, b) => a.price - b.price)[0];
-  const below = strong.filter(b => b.price < px).sort((a, b) => b.price - a.price)[0];
-  const biggest = bands.reduce((m, b) => (b.total > m.total ? b : m), bands[0]);
+  const zs = data.zones.filter(z => Math.abs(z.price - px) / px <= FIT_WIN[tf] / 100);   // las que entran en el encuadre
+  if (!zs.length) return;
+  const strong = zs.filter(z => z.ratio >= 0.3);
+  const above = strong.filter(z => z.price > px).sort((a, b) => a.price - b.price)[0];
+  const below = strong.filter(z => z.price < px).sort((a, b) => b.price - a.price)[0];
+  const biggest = zs.reduce((m, z) => (z.total > m.total ? z : m), zs[0]);
   const picked = [];
-  for (const b of [above, below, biggest]) if (b && !picked.includes(b)) picked.push(b);
-  for (const b of picked) {
-    const long = b.L >= b.S;
-    const d = b.price - px;
+  for (const z of [above, below, biggest]) if (z && !picked.includes(z)) picked.push(z);
+  for (const z of picked) {
+    const long = z.side === 'long';
+    const d = z.price - px;
     zoneLines.push(series.createPriceLine({
-      price: b.price, color: long ? '#ff9f1c' : '#2ec4ff', lineWidth: 1, lineStyle: 1, axisLabelVisible: true,
-      title: `${long ? 'largos' : 'cortos'} ≈${fmtM(b.total)} · ${d >= 0 ? '+' : '−'}${fmt(Math.abs(d))} pts`
+      price: z.price, color: long ? '#ff9f1c' : '#2ec4ff', lineWidth: 1, lineStyle: 1, axisLabelVisible: true,
+      title: `${long ? 'largos' : 'cortos'} ≈${fmtM(z.total)} · ${d >= 0 ? '+' : '−'}${fmt(Math.abs(d))} pts`
     }));
   }
+}
+
+// Sesgo: liquidez estimada cerca del precio (cortos arriba, largos abajo) y la zona más fuerte cercana («imán»)
+const BIAS_WIN = { '5m': 2, '15m': 3, '1h': 5, '4h': 10, '1d': 20 };
+const FIT_WIN = { '5m': 4, '15m': 6, '1h': 10, '4h': 20, '1d': 30 };
+function updateBias() {
+  if (!data || !data.heat || !data.heat.active) { biasEl.innerHTML = ''; return; }
+  const px = livePrice ?? data.price, w = BIAS_WIN[tf] / 100;
+  let up = 0, dn = 0;
+  for (const [p, L, S] of data.heat.active) {
+    if (p > px && p <= px * (1 + w)) up += S;
+    else if (p < px && p >= px * (1 - w)) dn += L;
+  }
+  if (!(up + dn > 0)) { biasEl.innerHTML = ''; return; }
+  const pu = Math.round(100 * up / (up + dn));
+  const near = (data.zones || []).filter(z => Math.abs(z.price - px) / px <= w);
+  const mag = near.reduce((m, z) => (!m || z.total > m.total ? z : m), null);
+  let html = `<span class="b" title="Liquidez estimada a ±${BIAS_WIN[tf]}% del precio. No es una señal de entrada.">±${BIAS_WIN[tf]}% <span class="S">▲ cortos ${pu}%</span>` +
+    `<span class="mini"><i style="width:${pu}%"></i></span><span class="L">▼ largos ${100 - pu}%</span></span>`;
+  if (mag) {
+    const d = mag.price - px, isUp = d > 0;
+    html += `<span class="b" title="Zona de liquidaciones más fuerte dentro de ±${BIAS_WIN[tf]}%">Imán ${isUp ? '▲' : '▼'} <b class="${isUp ? 'S' : 'L'}">${fmt(mag.price)}</b>` +
+      ` ${isUp ? '+' : '−'}${fmt(Math.abs(d))} pts · ≈${fmtM(mag.total)}</span>`;
+  }
+  biasEl.innerHTML = html;
+}
+function updateZoneRange() {
+  // zonas fuertes cercanas que el encuadre automático debe enseñar aunque las velas no lleguen
+  zoneRange = null;
+  if (!data || !data.zones) return;
+  const px = data.price, w = FIT_WIN[tf] / 100, half = (data.heat && data.heat.size) || 0;
+  const ps = data.zones.filter(z => z.ratio >= 0.3 && Math.abs(z.price - px) / px <= w).map(z => z.price);
+  if (ps.length) zoneRange = [Math.min(...ps) - half, Math.max(...ps) + half];
 }
 
 function updateAsia() {
@@ -564,15 +634,17 @@ function updateAsia() {
 }
 
 function updateStatus() {
-  const cls = data.source === 'coinglass' ? 'src-cg' : 'src-es';
   const hora = new Date(data.updated * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
   const current = livePrice ?? data.price;
   const liveClass = wsLive ? 'price-live' : 'price-offline';
-  const srcTxt = data.used.length > 2 ? `${data.used.length} fuentes` : data.used.join('+');
-  st.innerHTML = `<span class="${cls}">${data.source}</span> (${srcTxt}) · ${hora}<br>` +
+  const srcTxt = data.model === 'vol' ? 'volumen' : `${data.used.length} fuentes`;
+  const c = data.ctx || {}, oi = data.oi;
+  st.innerHTML = `<span class="src">estimado</span> · ${srcTxt} · ${hora}<br>` +
     `<span class="${liveClass}">${fmtLive(current)}</span>` +
-    (data.ctx && data.ctx.chg24 !== undefined ? ` <span class="${data.ctx.chg24 >= 0 ? 'rt' : 'err'}">${data.ctx.chg24 >= 0 ? '+' : ''}${data.ctx.chg24.toFixed(2).replace('.', ',')}% 24h</span>` : '') +
-    (data.ctx && data.ctx.mark ? `<br><span class="muted2">marca ${fmtLive(data.ctx.mark)}</span>` : '') + '<br>' +
+    (c.chg24 !== undefined ? ` <span class="${c.chg24 >= 0 ? 'rt' : 'err'}">${c.chg24 >= 0 ? '+' : ''}${c.chg24.toFixed(2).replace('.', ',')}% 24h</span>` : '') +
+    (oi && oi.usd ? `<br><span class="muted2">OI ${fmtM(oi.usd)}` +
+      (oi.chg24 !== null && oi.chg24 !== undefined ? ` (${oi.chg24 >= 0 ? '+' : ''}${oi.chg24.toFixed(1).replace('.', ',')}% 24h)` : '') + '</span>' : '') +
+    (c.mark ? `<br><span class="muted2">marca ${fmtLive(c.mark)}</span>` : '') + '<br>' +
     (wsLive ? '<span class="rt">● LIVE</span>' : '<span class="err">● OFFLINE</span>') +
     (data.note ? `<br><span class="err">${String(data.note).slice(0, 70)}</span>` : '');
 }
@@ -584,7 +656,8 @@ function flushLive(force) {
   lastLiveUi = now;
   if (livePrice !== null) setPriceLine(livePrice, previousLivePrice === null || livePrice >= previousLivePrice ? '#26a69a' : '#ef5350');
   if (liveBar) series.update({ ...liveBar });
-  updateZones(); updateStatus();
+  updateZones(); updateStatus(); updateBias();
+  if (showZones && now - lastZoneLines > 10000) { lastZoneLines = now; updateZoneLines(); }
 }
 
 function updateLivePrice(price, tradeMs) {
@@ -613,16 +686,6 @@ function onKline(k) {
   flushLive(false);
 }
 
-function onForceOrder(o) {
-  // liquidación real de Binance al instante (Bybit y OKX llegan con la recarga de cada minuto)
-  if (!o || !data || !data.liqs || !data.liqs.items) return;
-  const px = +o.ap || +o.p, qty = +o.z || +o.q;
-  if (!(px > 0 && qty > 0) || px * qty < 5000) return;
-  const t = Math.floor(o.T / 1000 / TFS[tf]) * TFS[tf];
-  data.liqs.items.push([t, px, o.S === 'SELL' ? 1 : -1, Math.round(px * qty)]);
-  version++;
-}
-
 function connectBinance() {
   if (ws) {
     const old = ws;
@@ -633,8 +696,8 @@ function connectBinance() {
   if (wsRetry) { clearTimeout(wsRetry); wsRetry = null; }
   wsLive = false;
   const sym = String((data && data.symbol) || 'BTCUSDT').toLowerCase();
-  // Binance (2026): operaciones, velas y liquidaciones van por la ruta /market
-  const url = `wss://fstream.binance.com/market/stream?streams=${sym}@aggTrade/${sym}@kline_${tf}/${sym}@forceOrder`;
+  // Binance (2026): operaciones y velas van por la ruta /market
+  const url = `wss://fstream.binance.com/market/stream?streams=${sym}@aggTrade/${sym}@kline_${tf}`;
   let sock;
   try { sock = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
   ws = sock;
@@ -647,7 +710,6 @@ function connectBinance() {
       wsLive = true;
       if (d.e === 'aggTrade') updateLivePrice(parseFloat(d.p), d.T);
       else if (d.e === 'kline') onKline(d.k);
-      else if (d.e === 'forceOrder') onForceOrder(d.o);
     } catch (e) { console.warn('WS parse error', e); }
   };
   sock.onerror = () => { try { sock.close(); } catch (e) {} };
@@ -659,6 +721,76 @@ function scheduleReconnect() {
   wsRetry = setTimeout(() => { wsRetry = null; connectBinance(); }, 3000);
 }
 
+const EX_NAME = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', deribit: 'Deribit', bitmex: 'BitMEX', hyperliquid: 'Hyperliquid', bitget: 'Bitget' };
+const TOAST_MIN = 250000, PULSE_MIN = 50000;
+
+function setLiqHistSeries() {
+  const keys = [...liqHist.keys()].sort((a, b) => a - b);
+  liqLSeries.setData(keys.map(t => ({ time: t, value: -liqHist.get(t)[0] })));
+  liqSSeries.setData(keys.map(t => ({ time: t, value: liqHist.get(t)[1] })));
+}
+
+function applyLiveLiq(ev, fresh) {
+  const [rowid, ts, ex, side, px, usd] = ev;
+  if (!data || !data.liqs || rowid <= (data.liqs.rowid || 0)) return;   // ya venía en los datos del servidor
+  const step = TFS[tf];
+  const tc = Math.floor(ts / 1000 / step) * step;
+  if (tc < data.candles[0].time) return;
+  const lastT = liqHist.size ? Math.max(...liqHist.keys()) : 0;
+  const hv = liqHist.get(tc) || [0, 0];
+  hv[side === 1 ? 0 : 1] += usd;
+  liqHist.set(tc, hv);
+  if (tc >= lastT) { liqLSeries.update({ time: tc, value: -hv[0] }); liqSSeries.update({ time: tc, value: hv[1] }); }
+  else setLiqHistSeries();
+  if (usd >= 5000) { data.liqs.items.push([tc, px, side, usd]); version++; }
+  if (fresh) { pulseAt(tc, px, side, usd); queueToast(ex, side, px, usd); }
+}
+
+async function pollLive() {
+  try {
+    const r = await fetch('/api/live?after=' + liveCursor + (K ? '&k=' + encodeURIComponent(K) : ''), { cache: 'no-store' });
+    const j = await r.json();
+    if (j.error) return;
+    liveCursor = j.cursor;
+    for (const ev of j.events || []) { liveBuf.push(ev); applyLiveLiq(ev, true); }
+    if (liveBuf.length > 800) liveBuf = liveBuf.slice(-500);
+  } catch (e) {}
+}
+
+function pulseAt(tc, px, side, usd) {
+  if (usd < PULSE_MIN) return;
+  const x = chart.timeScale().timeToCoordinate(tc), y = series.priceToCoordinate(px);
+  if (x === null || y === null || y < 0 || y > priceBottom()) return;
+  const sz = Math.round(12 + Math.min(34, Math.sqrt(usd / 1e4) * 3));
+  const el = document.createElement('div');
+  el.className = 'pulse' + (side === 1 ? '' : ' short');
+  Object.assign(el.style, { left: (x - sz / 2) + 'px', top: (y - sz / 2) + 'px', width: sz + 'px', height: sz + 'px' });
+  wrap.appendChild(el);
+  setTimeout(() => el.remove(), 1500);
+}
+
+function queueToast(ex, side, px, usd) {
+  // junta las liquidaciones de 2,5 s del mismo lado en un solo aviso (cascadas)
+  const b = toastBuf[side] || (toastBuf[side] = { usd: 0, n: 0, lo: px, hi: px, ex: new Set() });
+  b.usd += usd; b.n += 1; b.lo = Math.min(b.lo, px); b.hi = Math.max(b.hi, px); b.ex.add(ex);
+  if (!b.timer) b.timer = setTimeout(() => flushToast(side), 2500);
+}
+
+function flushToast(side) {
+  const b = toastBuf[side];
+  delete toastBuf[side];
+  if (!b || b.usd < TOAST_MIN) return;
+  const long = side === 1;
+  const where = b.hi - b.lo < 1 ? fmt(b.lo) : `${fmt(b.lo)}–${fmt(b.hi)}`;
+  const el = document.createElement('div');
+  el.className = 'toast' + (long ? '' : ' short');
+  el.innerHTML = `⚡ <b>${fmtM(b.usd)}</b> en ${long ? '<span class="L">largos</span>' : '<span class="S">cortos</span>'} liquidados · ${where}` +
+    `<br><span class="muted2">${b.n} ${b.n > 1 ? 'órdenes' : 'orden'} · ${[...b.ex].map(x => EX_NAME[x] || x).join(', ')}</span>`;
+  toastsEl.prepend(el);
+  while (toastsEl.children.length > 3) toastsEl.lastChild.remove();
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 450); }, 6000);
+}
+
 async function load() {
   try {
     const q = `tf=${tf}&model=${cfg.model}&lev=${cfg.levs.join(',')}` + (cfg.view === 'pro' ? '&bin=' + binParam() : '') +
@@ -667,7 +799,13 @@ async function load() {
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     data = d;
+    updateZoneRange();
     series.setData(d.candles);
+    doiMap = new Map((d.doi || []).map(([t, v]) => [t, v]));
+    doiSeries.setData((d.doi || []).map(([t, v]) => ({ time: t, value: v, color: v >= 0 ? 'rgba(38,166,154,0.85)' : 'rgba(239,83,80,0.85)' })));
+    liqHist = new Map(((d.liqs && d.liqs.hist) || []).map(([t, L, S]) => [t, [L, S]]));
+    setLiqHistSeries();
+    for (const ev of liveBuf) applyLiveLiq(ev, false);   // lo llegado en directo después de los datos del servidor
     // línea de precio inmediata con el último precio conocido
     const lc = d.candles[d.candles.length - 1];
     if (!liveBar || liveBar.time < lc.time) liveBar = { ...lc };
@@ -676,7 +814,9 @@ async function load() {
     setPriceLine(livePrice);
     if (first) {
       const n = d.candles.length;
-      if (cfg.view === 'pro') chart.timeScale().setVisibleLogicalRange({ from: 0, to: Math.round(n * 1.42) });
+      // cuántas velas caben a ~1,2 px por vela; en Pro se deja a la derecha un 42 % libre para el perfil
+      const fit = Math.max(60, Math.floor((wrap.clientWidth - 70) / 1.2));
+      if (cfg.view === 'pro') { const N = Math.min(n, fit); chart.timeScale().setVisibleLogicalRange({ from: n - N, to: n + Math.round(N * 0.42) }); }
       else chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 200), to: n + (showProf ? 78 : 18) });
       first = false;
     }
@@ -684,7 +824,7 @@ async function load() {
     lastKnownPrice = d.price;
     tindex = {}; d.candles.forEach((c, i) => { tindex[c.time] = i; });
     if (d.heat && d.heat.active) d.profAct = smoothActive(d.heat.active, d.heat.size);
-    updateAsia(); updateZones(); updateZoneLines(); updateStatus(); updateHeader(); buildCfg(); syncPools();
+    updateAsia(); updateZones(); updateZoneLines(); updateStatus(); updateHeader(); updateBias(); buildCfg(); syncPools();
     if (valEl.style.display === 'block' && first === false && valEl.dataset.tf !== tf) { valEl.dataset.tf = tf; loadVal(); }
     // reconectar el WebSocket si se cayó o cambió el símbolo
     if (!ws || ws.readyState > 1) connectBinance();   // solo si está cerrado o cerrándose
@@ -703,12 +843,11 @@ function chip(label, on, fn) {
 }
 function buildCfg() {
   const cv2 = document.getElementById('cView'); cv2.innerHTML = '';
-  [['pro', 'Pro'], ['clean', 'Limpia'], ['full', 'Completa']].forEach(([v, t]) => cv2.appendChild(chip(t, cfg.view === v, () => {
+  [['pro', 'Pro'], ['full', 'Completa']].forEach(([v, t]) => cv2.appendChild(chip(t, cfg.view === v, () => {
     const reload = (cfg.view === 'pro') !== (v === 'pro');
     cfg.view = v; saveCfg(); version++; updateZoneLines(); updateHeader(); if (livePrice !== null) setPriceLine(livePrice); buildCfg();
     if (reload) { first = true; data = null; lastSig = ''; load(); }
   })));
-  const EX_NAME = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', deribit: 'Deribit', bitmex: 'BitMEX', hyperliquid: 'Hyperliquid', bitget: 'Bitget' };
   const exs = (data && data.exchanges) || Object.keys(EX_NAME);
   const ce = document.getElementById('cEx'); ce.innerHTML = '';
   ce.appendChild(chip('Todos', !cfg.ex.length, () => { cfg.ex = []; saveCfg(); data = null; lastSig = ''; load(); }));
@@ -729,10 +868,6 @@ function buildCfg() {
     const next = cfg.levs.includes(l) ? cfg.levs.filter(x => x !== l) : cfg.levs.concat(l).sort((a, b) => a - b);
     if (!next.length) return;
     cfg.levs = next; saveCfg(); data = null; lastSig = ''; load();
-  })));
-  const cp = document.getElementById('cPal'); cp.innerHTML = '';
-  [['warm', 'Cálida'], ['cool', 'Fría']].forEach(([v, t]) => cp.appendChild(chip(t, cfg.palette === v, () => {
-    cfg.palette = v; saveCfg(); version++; buildCfg();
   })));
   document.getElementById('cMin').value = cfg.minPct;
   document.getElementById('cMinV').textContent = cfg.minPct;
@@ -789,7 +924,7 @@ function renderVal(v) {
   const c = (data && data.ctx) || {};
   const lq = (data && data.liqs) || {};
   const SRC_NAME = { binance: 'Binance USDT', binance_usdc: 'Binance USDC', binance_coinm: 'Binance COIN-M', bybit: 'Bybit',
-    okx_usdt: 'OKX USDT', okx_usd: 'OKX USD', hyperliquid: 'Hyperliquid', bitget: 'Bitget', deribit: 'Deribit', bitmex: 'BitMEX', volumen: 'Volumen', coinglass: 'Coinglass' };
+    okx_usdt: 'OKX USDT', okx_usd: 'OKX USD', hyperliquid: 'Hyperliquid', bitget: 'Bitget', deribit: 'Deribit', bitmex: 'BitMEX', volumen: 'Volumen' };
   if (data && data.used) parts.push(`<h4>Fuentes de Open Interest (${data.used.length})</h4>
     <div>${data.used.map(u => SRC_NAME[u] || u).join(' · ')}</div>
     <div class="muted">Hyperliquid, Bitget, Deribit y BitMEX no publican histórico: se graban cada minuto y suman datos con el paso de las horas.</div>`);
@@ -801,7 +936,7 @@ function renderVal(v) {
   const col = v.collectors || {};
   const dot = (x) => x && x.connected ? '<span class="ok">●</span>' : '<span class="bad">●</span>';
   parts.push(`<h4>Recogida de liquidaciones reales</h4>
-    <div>${['binance', 'bybit', 'okx', 'deribit', 'bitmex'].map(ex => `${dot(col[ex])} ${ex[0].toUpperCase() + ex.slice(1)}`).join(' · ')}</div>
+    <div>${['binance', 'bybit', 'okx', 'deribit', 'bitmex'].map(ex => `${dot(col[ex])} ${EX_NAME[ex]}`).join(' · ')}</div>
     <div class="muted">Guardadas: ${(v.db && v.db.events) || 0} · escuchando ${String((v.db && v.db.hours_listening) || 0).replace('.', ',')} h en total</div>
     <h4>Cómo leerlo</h4>
     <div class="muted">Acierto: % del dinero liquidado que cayó en una zona que el heatmap ya marcaba antes. Azar: lo que se acertaría con un precio cualquiera cercano. Burbuja <span class="L">naranja</span> = largos liquidados, <span class="S">cian</span> = cortos. Binance solo envía una muestra (1 por segundo).</div>`);
@@ -853,6 +988,7 @@ bMode.onclick = () => {
 bAsia.onclick = () => { showAsia = !showAsia; bAsia.classList.toggle('on', showAsia); if (data) updateAsia(); };
 bZones.onclick = () => { showZones = !showZones; bZones.classList.toggle('on', showZones); updateZones(); updateZoneLines(); };
 bProf.onclick = () => { showProf = !showProf; bProf.classList.toggle('on', showProf); };
+bPanes.onclick = () => { cfg.panes = !cfg.panes; saveCfg(); applyPanes(); version++; };
 
 const POOL_TIERS = [3, 5, 10, 25, 50, 100];
 function poolReadout(price) {
@@ -872,13 +1008,24 @@ function poolReadout(price) {
   document.getElementById('pTot').textContent = row ? fmtM(row[1] + row[2]) : '0';
   const { px, upC, dnC } = cumulativeSides();
   let cum = 0, side = '';
-  if (price > px) { for (const [p, c] of upC) { if (p <= price) cum = c; else break; } side = 'cortos'; }
-  else { for (const [p, c] of dnC) { if (p >= price) cum = c; else break; } side = 'largos'; }
+  // incluye el tramo que está bajo el cursor (su centro puede quedar medio tramo más allá)
+  if (price > px) { for (const [p, c] of upC) { if (p <= price + size / 2) cum = c; else break; } side = 'cortos'; }
+  else { for (const [p, c] of dnC) { if (p >= price - size / 2) cum = c; else break; } side = 'largos'; }
   document.getElementById('pCum').textContent = cum > 0 ? `Si llega aquí: ≈${fmtM(cum)} ${side}` : '';
 }
+function paneReadout(t) {
+  const el = document.getElementById('pAt');
+  if (!t || !data) { el.textContent = ''; return; }
+  const parts = [];
+  const d = doiMap.get(t), hv = liqHist.get(t);
+  if (d !== undefined) parts.push(`ΔOI ${d >= 0 ? '+' : ''}${fmtM(d)}`);
+  if (hv && (hv[0] || hv[1])) parts.push(`liquidado: largos ${fmtM(hv[0])} · cortos ${fmtM(hv[1])}`);
+  el.textContent = parts.join(' · ');
+}
 chart.subscribeCrosshairMove((param) => {
-  if (!param || !param.point) { poolReadout(null); return; }
-  poolReadout(series.coordinateToPrice(param.point.y));
+  if (!param || !param.point) { poolReadout(null); paneReadout(null); return; }
+  poolReadout(param.point.y <= priceBottom() ? series.coordinateToPrice(param.point.y) : null);
+  paneReadout(param.time);
 });
 
 function syncPools() {
@@ -909,11 +1056,15 @@ document.getElementById('pGroup').onchange = (e) => {
 };
 
 window.addEventListener('resize', layout);
+if (window.ResizeObserver) new ResizeObserver(layout).observe(bar);   // la barra cambia de alto en el móvil
 layout();
+applyPanes();
 buildCfg();
 requestAnimationFrame(render);
 load();
+pollLive();
 setInterval(load, 60000);
+setInterval(pollLive, 4000);
 setInterval(tickCountdown, 1000);
 </script>
 </body>

@@ -1,8 +1,9 @@
-"""Liquidaciones reales de BTCUSDT (Binance, Bybit, OKX): recolección, almacenamiento y validación.
+"""Liquidaciones reales de BTC (Binance, Bybit, OKX, Deribit y BitMEX): recolección, almacenamiento y validación.
 
 - Recolectores WebSocket que corren 24 h en hilos y guardan cada liquidación en SQLite.
 - Latido por minuto para saber qué horas estuvo escuchando el servidor (cobertura).
-- Agregado para dibujar burbujas en el gráfico.
+- Open Interest grabado por minuto de los exchanges que no publican histórico.
+- Agregados para el gráfico (burbujas y barras por vela) y feed en directo por cursor.
 - Validación: compara las zonas estimadas (antes de cada liquidación) con lo que pasó de verdad,
   y lo compara con el azar para saber si el heatmap aporta algo.
 """
@@ -105,6 +106,19 @@ def events_between(t0, t1):
             (int(t0 * 1000), int(t1 * 1000)),
         ).fetchall()
     return [{"ts": r[0], "ex": r[1], "side": r[2], "price": r[3], "mkt": r[4], "qty": r[5], "usd": r[6]} for r in rows]
+
+
+def events_after(rowid, limit=300):
+    """Liquidaciones guardadas después del cursor (rowid). Con cursor 0 o caducado devuelve solo el cursor actual."""
+    with _db_lock:
+        c = _conn()
+        top = c.execute("SELECT COALESCE(MAX(rowid), 0) FROM liq").fetchone()[0]
+        if rowid <= 0 or rowid > top:          # primera vez, o la base de datos es nueva: empezar desde ahora
+            return [], top
+        rows = c.execute("SELECT rowid, ts, ex, side, price, mkt, usd FROM liq WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                         (int(rowid), int(limit))).fetchall()
+    cursor = rows[-1][0] if rows else rowid
+    return [{"rowid": r[0], "ts": r[1], "ex": r[2], "side": r[3], "price": r[4], "mkt": r[5], "usd": r[6]} for r in rows], cursor
 
 
 def covered_minutes(t0, t1):
@@ -422,15 +436,24 @@ def status():
     return out
 
 
-# ───────────── Burbujas para el gráfico ─────────────
+# ───────────── Burbujas y barras por vela para el gráfico ─────────────
 def chart_liqs(candles, step, min_usd=None, limit=2000, now=None):
+    """items: burbujas [vela, precio medio, lado, USD] agrupadas por vela, lado y tramo de 0,05 %.
+    hist: barras por vela [vela, USD largos, USD cortos]. rowid: último evento incluido (para el feed en directo)."""
     min_usd = LIQ_MIN_USD if min_usd is None else min_usd
     if not candles:
-        return {"items": [], "long_24h": 0, "short_24h": 0, "n_24h": 0}
+        return {"items": [], "hist": [], "rowid": 0, "long_24h": 0, "short_24h": 0, "n_24h": 0}
     t0, t1 = candles[0]["time"], candles[-1]["time"] + step
     ref = candles[-1]["close"]
+    with _db_lock:      # cursor y eventos en la misma lectura: nada se cuenta dos veces con el feed en directo
+        c = _conn()
+        top = c.execute("SELECT COALESCE(MAX(rowid), 0) FROM liq").fetchone()[0]
+        rows = c.execute("SELECT ts, side, price, mkt, usd FROM liq WHERE ts >= ? AND ts < ? AND rowid <= ?",
+                         (int(t0 * 1000), int(t1 * 1000), top)).fetchall()
     agg = {}
-    for e in events_between(t0, t1):
+    hist = defaultdict(lambda: [0.0, 0.0])
+    for ts, side, price, mkt, usd in rows:
+        e = {"ts": ts, "side": side, "price": price, "mkt": mkt, "usd": usd}
         tc = e["ts"] // 1000
         tc -= tc % step
         px = e["mkt"] or e["price"]
@@ -438,12 +461,15 @@ def chart_liqs(candles, step, min_usd=None, limit=2000, now=None):
         a = agg.setdefault(key, [0.0, 0.0])
         a[0] += e["usd"]
         a[1] += px * e["usd"]
+        hist[tc][0 if e["side"] == 1 else 1] += e["usd"]
     items = [[t, round(pw / u, 2), side, round(u)] for (t, side, _), (u, pw) in agg.items() if u >= min_usd and u > 0]
     items.sort(key=lambda x: -x[3])
     now = now or time.time()
     day = events_between(now - 86400, now + 60)
     return {
         "items": items[:limit],
+        "hist": [[t, round(v[0]), round(v[1])] for t, v in sorted(hist.items())],
+        "rowid": top,
         "long_24h": round(sum(e["usd"] for e in day if e["side"] == 1)),
         "short_24h": round(sum(e["usd"] for e in day if e["side"] == -1)),
         "n_24h": len(day),
