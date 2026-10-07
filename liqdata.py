@@ -1,6 +1,6 @@
-"""Liquidaciones reales de BTC (Binance, Bybit, OKX, Deribit y BitMEX): recolección, almacenamiento y validación.
+"""Liquidaciones reales de BTC (Binance, Bybit, OKX, Deribit, BitMEX, Bitget, Gate y HTX): recolección, almacenamiento y validación.
 
-- Recolectores WebSocket que corren 24 h en hilos y guardan cada liquidación en SQLite.
+- Recolectores WebSocket (y consultas REST para Bitget, Gate y HTX) que corren 24 h en hilos y guardan cada liquidación en SQLite.
 - Latido por minuto para saber qué horas estuvo escuchando el servidor (cobertura).
 - Open Interest grabado por minuto de los exchanges que no publican histórico.
 - Agregados para el gráfico (burbujas y barras por vela) y feed en directo por cursor.
@@ -13,7 +13,7 @@ import os
 import sqlite3
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import requests
 
@@ -30,9 +30,14 @@ LIQ_MIN_USD = float(os.getenv("LIQ_MIN_USD", "5000"))
 # Binance separó sus WebSocket de futuros en 2026: liquidaciones, precio de marca, velas y operaciones van por /market
 BINANCE_WS = os.getenv("BINANCE_WS", "wss://fstream.binance.com/market")
 
-EXCHANGES = ("binance", "bybit", "okx", "deribit", "bitmex")
+GATE_CONTRACT = os.getenv("GATE_CONTRACT", "BTC_USDT")
+BITGET_SYMBOL = os.getenv("BITGET_SYMBOL", SYMBOL)
+HTX_CONTRACT = os.getenv("HTX_CONTRACT", "BTC-USDT")
+
+EXCHANGES = ("binance", "bybit", "okx", "deribit", "bitmex", "bitget", "gate", "htx")
 STATUS = {ex: {"connected": False, "last_msg": 0, "events": 0, "error": None, "since": None} for ex in EXCHANGES}
 MARK = {"price": None, "funding": None, "next_funding": None, "ts": 0}
+_mark_hist = deque(maxlen=1200)   # (ts ms, precio de marca de Binance) de los últimos ~20 min
 
 _db = None
 _db_lock = threading.Lock()
@@ -177,10 +182,21 @@ def _ev(ts, ex, side, price, mkt, qty):
             "qty": float(qty), "usd": float(qty) * float(px)}
 
 
+def mark_at(ts_ms, max_gap_ms=10000):
+    """Precio de marca de Binance más cercano a ts_ms (None si no hay ninguno a menos de max_gap_ms).
+    Sirve para situar liquidaciones que llegan con precio de quiebra o con unos segundos de retraso."""
+    best = None
+    for t, p in reversed(_mark_hist):
+        d = abs(t - ts_ms)
+        if best is None or d < best[0]:
+            best = (d, p)
+        if t < ts_ms - max_gap_ms:
+            break
+    return best[1] if best and best[0] <= max_gap_ms else None
+
+
 def _mark_near(ts_ms):
-    if MARK["price"] and abs(MARK["ts"] - ts_ms) < 10000:
-        return MARK["price"]
-    return None
+    return mark_at(ts_ms)
 
 
 def parse_binance(msg):
@@ -191,6 +207,7 @@ def parse_binance(msg):
         if d.get("s", SYMBOL) == SYMBOL:
             MARK.update(price=float(d["p"]), funding=float(d.get("r") or 0),
                         next_funding=int(d.get("T") or 0), ts=int(d.get("E") or time.time() * 1000))
+            _mark_hist.append((MARK["ts"], MARK["price"]))
         return []
     if e != "forceOrder":
         return []
@@ -304,7 +321,194 @@ def parse_bitmex(msg):
     return out
 
 
+GATE_MULT = {"v": 0.0001}   # BTC por contrato de BTC_USDT (se actualiza al arrancar)
+
+
+def parse_gate(rows):
+    """liq_orders de Gate (REST público). size = posición liquidada (+ largo, − corto) en contratos;
+    order_size − left = contratos ejecutados; order_price = precio de la orden; fill_price = precio de ejecución.
+    Comprobado con datos reales: size negativo con el precio subiendo (cortos liquidados)."""
+    out = []
+    for x in rows if isinstance(rows, list) else []:
+        if x.get("contract") != GATE_CONTRACT:
+            continue
+        try:
+            size = float(x.get("size") or 0)
+            fill = float(x.get("fill_price") or 0)
+            order_px = float(x.get("order_price") or 0) or fill
+            done = abs(float(x.get("order_size") or size)) - abs(float(x.get("left") or 0))
+            ts = int(float(x.get("time") or 0)) * 1000
+        except (TypeError, ValueError):
+            continue
+        if size == 0 or fill <= 0 or ts <= 0:
+            continue
+        if done <= 0:
+            done = abs(size)
+        out.append(_ev(ts, "gate", 1 if size > 0 else -1, order_px, fill, done * GATE_MULT["v"]))
+    return out
+
+
+def parse_bitget(resp):
+    """/api/v3/market/liquidations de Bitget (REST público). side = lado de la posición liquidada: «buy» = largo
+    (comprobado: todo «buy» durante la cascada de largos del 07-10-2026 02:01 UTC). amount en BTC.
+    price ≈ precio de quiebra: para situarla se usa el precio de marca de Binance de ese momento."""
+    data = resp.get("data") if isinstance(resp, dict) else None
+    out = []
+    for x in (data.get("list") if isinstance(data, dict) else None) or []:
+        if x.get("symbol") != BITGET_SYMBOL:
+            continue
+        try:
+            qty, px, ts = float(x.get("amount") or 0), float(x.get("price") or 0), int(x.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0 or px <= 0 or ts <= 0:
+            continue
+        side = 1 if str(x.get("side")).lower() == "buy" else -1
+        out.append(_ev(ts, "bitget", side, px, mark_at(ts), qty))
+    return out
+
+
+HTX_CT = {"v": 0.001}   # BTC por contrato de BTC-USDT (se actualiza al arrancar)
+
+
+def parse_htx(resp):
+    """Órdenes de liquidación de HTX (REST público, USDT-M). direction = la orden que cierra la posición:
+    «sell» cierra un largo (largo liquidado) y «buy» un corto, igual que el forceOrder de Binance.
+    amount en BTC (si falta: volume en contratos × tamaño del contrato). price ≈ precio de quiebra:
+    para situarla se usa el precio de marca de Binance de ese momento."""
+    if not isinstance(resp, dict):
+        return []
+    data = resp.get("data")
+    rows = data.get("orders") if isinstance(data, dict) else data       # v3: lista · v1: {"orders": [...]}
+    out = []
+    for x in rows if isinstance(rows, list) else []:
+        if not isinstance(x, dict) or (x.get("contract_code") or x.get("contract")) != HTX_CONTRACT:
+            continue
+        try:
+            px = float(x.get("price") or 0)
+            qty = float(x.get("amount") or 0) or float(x.get("volume") or 0) * HTX_CT["v"]
+            ts = int(x.get("created_at") or 0)
+        except (TypeError, ValueError):
+            continue
+        d = str(x.get("direction") or "").lower()
+        if qty <= 0 or px <= 0 or ts <= 0 or d not in ("buy", "sell"):
+            continue
+        out.append(_ev(ts, "htx", 1 if d == "sell" else -1, px, mark_at(ts), qty))
+    return out
+
+
+def _fetch_htx(since_ms, now):
+    r = requests.get("https://api.hbdm.com/linear-swap-api/v3/swap_liquidation_orders", timeout=10,
+                     params={"contract": HTX_CONTRACT, "trade_type": 0})
+    r.raise_for_status()
+    j = r.json()
+    if str(j.get("code", 200)) != "200" and j.get("status") != "ok":
+        raise RuntimeError(f"HTX: {j.get('msg') or j.get('err_msg') or j.get('code')}")
+    return j
+
+
+def _htx_ct():
+    try:
+        r = requests.get("https://api.hbdm.com/linear-swap-api/v1/swap_contract_info",
+                         params={"contract_code": HTX_CONTRACT}, timeout=10).json()
+        HTX_CT["v"] = float(r["data"][0]["contract_size"])
+    except Exception:
+        pass
+
+
+def _fetch_gate(since_ms, now):
+    r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/liq_orders", timeout=10,
+                     params={"contract": GATE_CONTRACT, "from": max(int(since_ms // 1000) - 5, int(now) - 3500),
+                             "to": int(now) + 5, "limit": 1000})
+    r.raise_for_status()
+    return r.json()
+
+
+def _fetch_bitget(since_ms, now, pages=5):
+    """Últimas liquidaciones; si llega una página llena de nuevas, se pide la siguiente (cascadas grandes)."""
+    rows, cursor = [], None
+    for _ in range(pages):
+        params = {"category": "USDT-FUTURES", "symbol": BITGET_SYMBOL, "limit": "100"}
+        if cursor:
+            params["cursor"] = cursor
+        r = requests.get("https://api.bitget.com/api/v3/market/liquidations", params=params, timeout=10)
+        r.raise_for_status()
+        j = r.json()
+        if str(j.get("code")) != "00000":
+            raise RuntimeError(f"Bitget: {j.get('msg')}")
+        page = (j.get("data") or {}).get("list") or []
+        rows += page
+        cursor = (j.get("data") or {}).get("cursor")
+        oldest = min((int(x.get("ts") or 0) for x in page), default=0)
+        if len(page) < 100 or not cursor or oldest <= since_ms:
+            break
+    return {"data": {"list": rows}}
+
+
+def _gate_mult():
+    try:
+        r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/contracts/{GATE_CONTRACT}", timeout=10).json()
+        GATE_MULT["v"] = float(r["quanto_multiplier"])
+    except Exception:
+        pass
+
+
 # ───────────── Recolectores ─────────────
+class RESTCollector(threading.Thread):
+    """Consulta cada pocos segundos un endpoint público de liquidaciones (Bitget, Gate y HTX).
+    No repite nada: recuerda lo ya guardado (también lo de antes de un reinicio) durante 30 min."""
+
+    def __init__(self, ex, fetch, parser, every=10, warmup_s=180):
+        super().__init__(daemon=True, name=f"liq-{ex}")
+        self.ex, self.fetch, self.parser, self.every, self.warmup_s = ex, fetch, parser, every, warmup_s
+        self.seen = {}
+        self.min_ts = None
+        self.last_ts = 0
+
+    @staticmethod
+    def key(e):
+        return (int(e["ts"]), int(e["side"]), round(float(e["price"]), 2), round(float(e["qty"]), 8))
+
+    def seed(self, now=None):
+        now = now or time.time()
+        self.min_ts = int((now - self.warmup_s) * 1000)       # al arrancar solo se recuperan los últimos 3 min
+        for e in events_between(now - 1800, now + 60):
+            if e["ex"] == self.ex:
+                self.seen[self.key(e)] = e["ts"]
+                self.last_ts = max(self.last_ts, e["ts"])
+
+    def poll_once(self, now=None):
+        now = now or time.time()
+        if self.min_ts is None:
+            self.seed(now)
+        evs = self.parser(self.fetch(max(self.last_ts, self.min_ts), now))
+        new = []
+        for e in sorted(evs, key=lambda e: e["ts"]):
+            k = self.key(e)
+            if e["ts"] < self.min_ts or k in self.seen:
+                continue
+            self.seen[k] = e["ts"]
+            self.last_ts = max(self.last_ts, e["ts"])
+            new.append(e)
+        if len(self.seen) > 3000:
+            lim = int((now - 1800) * 1000)
+            self.seen = {k: t for k, t in self.seen.items() if t >= lim}
+        save_events(new)
+        st = STATUS[self.ex]
+        st.update(connected=True, last_msg=int(now), error=None)
+        if st["since"] is None:
+            st["since"] = int(now)
+        return new
+
+    def run(self):
+        while True:
+            try:
+                self.poll_once()
+            except Exception as e:
+                STATUS[self.ex].update(connected=False, error=str(e)[:200])
+            time.sleep(self.every)
+
+
 class WSCollector(threading.Thread):
     def __init__(self, ex, url, parser, subscribe=None, ping_text=None, ping_every=20):
         super().__init__(daemon=True, name=f"liq-{ex}")
@@ -416,6 +620,11 @@ def start():
                 ping_every=25).start()
     WSCollector("bitmex", f"wss://ws.bitmex.com/realtime?subscribe=liquidation:{BITMEX_SYMBOL}", parse_bitmex,
                 ping_text="ping", ping_every=25).start()
+    RESTCollector("bitget", _fetch_bitget, parse_bitget).start()
+    _gate_mult()
+    RESTCollector("gate", _fetch_gate, parse_gate).start()
+    _htx_ct()
+    RESTCollector("htx", _fetch_htx, parse_htx).start()
     threading.Thread(target=_maintenance, daemon=True, name="liq-maint").start()
 
 

@@ -9,6 +9,8 @@ import requests
 from flask import Flask, jsonify, request, send_from_directory
 
 import cg as CG
+import cz as CZ
+import hl as HL
 import liqdata as LQ
 
 app = Flask(__name__, static_folder="static")
@@ -21,13 +23,15 @@ except ImportError:  # pragma: no cover
 # ───────────── Configuración (variables de entorno) ─────────────
 SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
 FAPI = os.getenv("BINANCE_FAPI", "https://fapi.binance.com")
+SPOT = os.getenv("BINANCE_SPOT", "https://api.binance.com")
 BYBIT = os.getenv("BYBIT_BASE", "https://api.bybit.com")
 # Fuentes de Open Interest: las 6 primeras tienen histórico; las 4 últimas se graban cada minuto en la base de datos
 ALL_SOURCES = ("binance", "bybit", "binance_usdc", "binance_coinm", "okx_usdt", "okx_usd",
                "hyperliquid", "bitget", "deribit", "bitmex")
 ENABLED_SOURCES = set(os.getenv("OI_SOURCES", ",".join(ALL_SOURCES)).split(","))
 EX_GROUPS = {"binance": ["binance", "binance_usdc", "binance_coinm"], "bybit": ["bybit"], "okx": ["okx_usdt", "okx_usd"],
-             "deribit": ["deribit"], "bitmex": ["bitmex"], "hyperliquid": ["hyperliquid"], "bitget": ["bitget"]}
+             "deribit": ["deribit"], "bitmex": ["bitmex"], "hyperliquid": ["hyperliquid"], "bitget": ["bitget"],
+             "otros": []}   # «otros»: mercados que trae Coinalyze (cz1, cz2…), solo con COINALYZE_API_KEY
 
 ACCESS_KEY = os.getenv("ACCESS_KEY", "").strip()
 CACHE_TTL = int(os.getenv("CACHE_TTL", "60"))
@@ -51,7 +55,7 @@ BYBIT_IV = {"5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1d"}
 
 ALL_TIERS = [3, 5, 10, 25, 50, 100]
 TIER_W = {3: 0.08, 5: 0.12, 10: 0.22, 25: 0.28, 50: 0.18, 100: 0.12}
-MODELS = ("auto", "oi", "vol")
+MODELS = ("auto", "oi", "vol", "hl")   # hl: posiciones reales de Hyperliquid (no estimado)
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "auto")
 if DEFAULT_MODEL not in MODELS:
     DEFAULT_MODEL = "auto"
@@ -118,6 +122,19 @@ def fetch_candles(tf, limit=None):
     ]
     _candle_cache[(tf, limit)] = (time.time(), out)
     return [dict(c) for c in out]
+
+
+def fetch_spot_deltas(tf, limit=None):
+    """Delta de spot por vela (compras − ventas a mercado, USD) de BTCUSDT en Binance Spot, para el CVD."""
+    limit = limit or CANDLES[tf]
+    key = ("spot", tf, limit)
+    hit = _candle_cache.get(key)
+    if hit and time.time() - hit[0] < 15:
+        return dict(hit[1])
+    rows = get_json(f"{SPOT}/api/v3/klines", {"symbol": SYMBOL, "interval": tf, "limit": min(limit, 1000)})
+    out = {int(r[0] // 1000): 2 * float(r[10]) - float(r[7]) for r in rows if len(r) > 10}
+    _candle_cache[key] = (time.time(), out)
+    return dict(out)
 
 
 def fetch_oi_binance(tf, limit=None):
@@ -243,6 +260,8 @@ def load_sources(tf, candles, groups=None):
         "okx_usd": lambda: fetch_oi_okx("BTC-USD-SWAP", tf),
     }
     names = [n for n in ALL_SOURCES if n in ENABLED_SOURCES and (want is None or n in want)]
+    cz_src, cz_labels = CZ.oi_sources(tf) if CZ.KEY else ({}, {})
+    extra = [n for n in sorted(cz_src) if n.startswith("cz") and (want is None or "otros" in (groups or ()))]
     futures = {n: _pool.submit(hist[n]) for n in names if n in hist}
     px = {c["time"]: c["close"] for c in candles}
     sources, errors = {}, []
@@ -252,13 +271,31 @@ def load_sources(tf, candles, groups=None):
                 data = align_oi(candles, futures[name].result(timeout=40), step)
                 if name == "bybit":
                     data = {t: v * px[t] for t, v in data.items() if t in px}
+            elif name in cz_src:              # histórico de Coinalyze en vez de esperar a grabarlo
+                data = align_oi(candles, cz_src[name], step)
             else:
                 data = LQ.oi_snapshots(name, candles, step)
             if len(data) >= 3:
                 sources[name] = data
         except Exception as e:
             errors.append(f"OI {name}: {str(e)[:60]}")
+    for name in extra:
+        data = align_oi(candles, cz_src[name], step)
+        if len(data) >= 3:
+            sources[name] = data
     return sources, errors
+
+
+def source_labels():
+    """Nombre legible de las fuentes que trae Coinalyze (cz1 -> «Gate BTC_USDT»)."""
+    return CZ.labels("5m") if CZ.KEY else {}
+
+
+def doi_series(candles, sources):
+    prev, out = {}, []
+    for c in candles:
+        out.append(oi_delta(sources, prev, c["time"]))
+    return out
 
 
 def oi_summary(sources, candles, step):
@@ -639,9 +676,25 @@ def build(tf, model, levs, bin_pct=None, groups=None):
         params["bin_pct"] = bin_pct
     out = {}
     oi = None
+    hl_since = None
     if model == "vol":
         heat, zones = estimate_heat(candles, {}, price, tiers, "vol", out=out, params=params)
         used = ["volumen"]
+    elif model == "hl":
+        size = price * (bin_pct or BIN_PCT) / 100
+        heat, _touches, hl_since = HL.build_heat(candles, step, size, price, params["range_pct"],
+                                                 tiers=[l for l, _ in tiers])
+        zones = cluster_zones(heat["active"], price)
+        used = ["hyperliquid_real"]
+        try:
+            sources, errs = load_sources(tf, candles, groups)     # para el panel de ΔOI y el OI total
+            notes += errs
+            out["doi"] = doi_series(candles, sources)
+            oi = oi_summary(sources, candles, step) if sources else None
+        except Exception as e:
+            notes.append(f"OI: {str(e)[:60]}")
+        if not heat["active"]:
+            notes.append("Hyperliquid real: aún no hay posiciones encontradas (arrancando)")
     else:
         sources, errs = load_sources(tf, candles, groups)
         notes += errs
@@ -677,10 +730,38 @@ def build(tf, model, levs, bin_pct=None, groups=None):
         "doi": doi,
         "oi": oi,
         "asia": asia,
-        "liqs": safe_chart_liqs(candles, step),
+        "liqs": safe_chart_liqs(candles, step, tf),
         "book": safe_book(price),
         "ctx": market_context(),
+        "cvd": safe_cvd(tf, candles, notes),
+        "hl": safe_hl(price, params["range_pct"], hl_since),
+        "labels": source_labels(),
+        "credits": ["coinalyze"] if CZ.KEY and CZ.STATE["data"] else [],
     }
+
+
+def safe_cvd(tf, candles, notes):
+    """[[vela, delta futuros, delta spot]] en USD (compras − ventas a mercado). La web lo acumula (CVD)."""
+    try:
+        spot = fetch_spot_deltas(tf)
+    except Exception as e:
+        spot = {}
+        notes.append(f"CVD spot: {str(e)[:60]}")
+    out = []
+    for c in candles:
+        perp = 2 * c["tb"] - c["v"] if c.get("tb") is not None and c.get("v") else None
+        sp = spot.get(c["time"])
+        out.append([c["time"], round(perp) if perp is not None else None, round(sp) if sp is not None else None])
+    return out
+
+
+def safe_hl(price, range_pct, since=None):
+    try:
+        s = HL.summary(price, range_pct)
+        s["recorded_since"] = since
+        return s
+    except Exception as e:
+        return {"error": str(e)[:120]}
 
 
 def safe_book(price):
@@ -690,11 +771,44 @@ def safe_book(price):
         return {"error": str(e)[:120]}
 
 
-def safe_chart_liqs(candles, step):
+def safe_chart_liqs(candles, step, tf=None):
     try:
-        return LQ.chart_liqs(candles, step)
+        res = LQ.chart_liqs(candles, step)
     except Exception as e:
         return {"items": [], "hist": [], "rowid": 0, "error": str(e)[:120]}
+    res["exchanges"] = len(LQ.EXCHANGES)
+    if CZ.KEY and tf:
+        try:
+            res.update(merge_cz_liqs(candles, step, tf, res["hist"]))
+        except Exception as e:
+            res["cz_error"] = str(e)[:120]
+    return res
+
+
+def merge_cz_liqs(candles, step, tf, hist):
+    """Barras por vela = lo nuestro (con precio) + Coinalyze: los mercados que no escuchamos y,
+    en las velas en las que el servidor no estuvo escuchando, también los nuestros."""
+    ext, own, n_ext = CZ.liq_split(tf)
+    if not ext and not own:
+        return {}
+    t0, t1 = candles[0]["time"], candles[-1]["time"] + step
+    cov = defaultdict(int)
+    for m in LQ.covered_minutes(t0, t1):
+        cov[m - m % step] += 1
+    need = max(1, step // 60)
+    by_t = {t: [L, S] for t, L, S in hist}
+    filled = 0
+    for c in candles[:-1]:                      # la vela en curso la cuenta el directo
+        t = c["time"]
+        if cov.get(t, 0) < 0.8 * need and t in own:
+            by_t[t] = [round(own[t][0]), round(own[t][1])]
+            filled += 1
+    for t, (L, S) in ext.items():
+        if t0 <= t < t1:
+            v = by_t.setdefault(t, [0, 0])
+            v[0] += round(L)
+            v[1] += round(S)
+    return {"hist": [[t, v[0], v[1]] for t, v in sorted(by_t.items())], "cz_markets": n_ext, "cz_filled": filled}
 
 
 def norm_args(model, levs):
@@ -743,6 +857,7 @@ def run_validation(tf, levs):
         plan.insert(0, ("auto", tiers_from(calib["params"]["tiers"]),
                         {"half_life_h": calib["params"].get("half_life_h"), "spike_z": calib["params"].get("spike_z", 0.0),
                          "close_on_drop": calib["params"].get("close_on_drop", False)}))
+    est = None
     for name, tr, params in plan:
         if name != "vol" and not sources:
             continue
@@ -750,11 +865,56 @@ def run_validation(tf, levs):
         heat, _ = estimate_heat(candles, sources if name != "vol" else {}, price, tr,
                                 "vol" if name == "vol" else "oi", out=out, params=params)
         res["models"][name] = LQ.validate(candles, step, heat, out["touches"], events, covered)
+        if est is None and name != "vol":
+            est = heat
+    try:
+        size = price * BIN_PCT / 100
+        hheat, htouch, since = HL.build_heat(candles, step, size, price, RANGE_BY_TF.get(tf, RANGE_PCT))
+        if since is not None and hheat["segments"]:
+            res["models"]["hl"] = LQ.validate(candles, step, hheat, htouch, events, covered)
+        if est is not None:
+            res["hl_compare"] = compare_real(est, HL.levels(price, est["size"], RANGE_BY_TF.get(tf, RANGE_PCT)), price)
+    except Exception as e:
+        res["notes"].append(f"Hyperliquid: {str(e)[:80]}")
+    res["hl"] = HL.status()
     res["calib"] = LQ.meta_get("calib")
     res["collectors"] = LQ.status()
     res["db"] = LQ.db_counts()
     res["updated"] = int(time.time())
     return res
+
+
+def compare_real(heat, real, price, min_ratio=0.1, tol_pct=0.1, win_pct=2.0):
+    """¿Marca el mapa estimado dónde están de verdad las liquidaciones de Hyperliquid?
+    coincide: % (en USD) de lo real que cae a ±tol de un tramo estimado fuerte del mismo lado.
+    azar: lo mismo si lo real estuviera en un precio cualquiera a ±win (cuánto cubren los tramos fuertes)."""
+    size = heat["size"]
+    act = heat.get("active") or []
+    vmax = max((a[1] + a[2] for a in act), default=0)
+    if not vmax or not real:
+        return None
+    thr = min_ratio * vmax
+    strong = {1: set(), -1: set()}
+    for p, L, S, *_ in act:
+        b = math.floor(p / size)
+        if L >= thr:
+            strong[1].add(b)
+        if S >= thr:
+            strong[-1].add(b)
+    tol = max(1, math.ceil(price * tol_pct / 100 / size))
+    win = max(tol + 1, math.ceil(price * win_pct / 100 / size))
+    near = {side: {k + d for k in bins for d in range(-tol, tol + 1)} for side, bins in strong.items()}
+    tot = hit = base = 0.0
+    for b, (L, S, _tv) in real.items():
+        for side, usd in ((1, L), (-1, S)):
+            if usd <= 0:
+                continue
+            tot += usd
+            hit += usd * (b in near[side])
+            base += usd * sum(1 for q in range(b - win, b + win + 1) if q in near[side]) / (2 * win + 1)
+    if not tot:
+        return None
+    return {"match": hit / tot, "base": base / tot, "lift": (hit / base) if base else None, "usd": round(tot)}
 
 
 CALIB_GRID = [
@@ -861,7 +1021,11 @@ def snapshot_oi_now():
     good = {k: v for k, v in out.items() if 1e8 <= v <= 2e11}   # descarta unidades raras
     if good:
         LQ.save_oi_snapshots(good)
+        LAST_OI.update(good)
     return good
+
+
+LAST_OI = {}
 
 
 def snapshot_loop():
@@ -993,6 +1157,8 @@ if os.getenv("COLLECT", "1") != "0":
     threading.Thread(target=calib_loop, daemon=True, name="calib").start()
     threading.Thread(target=snapshot_loop, daemon=True, name="oi-snap").start()
     CG.start()   # solo si hay COINGLASS_API_KEY: comprueba qué deja usar el plan
+    CZ.start()   # solo si hay COINALYZE_API_KEY
+    HL.start(lambda: LQ.MARK["price"], lambda: LAST_OI.get("hyperliquid"))
 
 
 # ───────────── Rutas ─────────────
@@ -1041,7 +1207,7 @@ def api_validate():
     except ValueError:
         return jsonify({"error": "lev no válido"}), 400
     try:
-        return jsonify(dict(get_validation(tf, levs), coinglass=CG.summary()))
+        return jsonify(dict(get_validation(tf, levs), coinglass=CG.summary(), coinalyze=safe_call(CZ.status)))
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -1069,7 +1235,33 @@ def api_status():
     except Exception as e:
         db = {"error": str(e)[:120]}
     return jsonify({"collectors": LQ.status(), "db": db, "mark": LQ.MARK, "data_dir": LQ.DATA_DIR,
-                    "coinglass": CG.summary(detail=True)})
+                    "coinglass": CG.summary(detail=True), "hyperliquid": safe_call(HL.status),
+                    "coinalyze": safe_call(cz_status)})
+
+
+def safe_call(fn):
+    try:
+        return fn()
+    except Exception as e:
+        return {"error": str(e)[:120]}
+
+
+def cz_status():
+    """Estado de Coinalyze y una comprobación: largos/cortos de Binance en 24 h según ellos y según lo nuestro
+    (si «l» y «s» estuvieran al revés, aquí se vería)."""
+    st = CZ.status()
+    if not st:
+        return None
+    d = CZ.STATE["data"].get("1h")
+    m = next((x for x in CZ.STATE["liq"] if x["key"] == ("binance", "BTCUSDT")), None)
+    if d and m:
+        now = time.time()
+        series = d["liq"].get(m["symbol"]) or {}
+        cz = [round(sum(v[k] for t, v in series.items() if t >= now - 86400)) for k in (0, 1)]
+        evs = [e for e in LQ.events_between(now - 86400, now) if e["ex"] == "binance"]
+        ours = [round(sum(e["usd"] for e in evs if e["side"] == s)) for s in (1, -1)]
+        st["check_binance_24h"] = {"coinalyze": cz, "nuestro": ours}
+    return st
 
 
 @app.route("/api/live")

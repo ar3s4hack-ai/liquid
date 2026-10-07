@@ -53,6 +53,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 #cfg input[type=range]{width:100%}
 .muted2{color:#8b95ab;font-size:11px}
 .L{color:#ff9f1c}.S{color:#2ec4ff}.src{color:#7fb0ff}.err{color:#ef5350}.rt{color:#26a69a}
+#st a{color:#7fb0ff;text-decoration:none}
 .price-live{color:#26a69a;font-weight:700}.price-offline{color:#ef5350;font-weight:700}
 @media (max-width:600px){#hdr{font-size:10.5px}#bias{font-size:11px}#bias .mini{width:40px}#zones{font-size:11px}#pools{font-size:11px}button{padding:5px 8px;font-size:13px}}
 </style>
@@ -91,7 +92,9 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
     <div class="row"><div class="lbl">Vista</div><div id="cView"></div></div>
     <div class="row"><div class="lbl">Capas</div>
       <button id="bProf" class="tg on">Perfil</button><button id="bPanes" class="tg">Paneles</button><button id="bMode" class="tg">Calor</button><button id="bZones" class="tg">Zonas</button>
-      <button id="bAsia" class="tg">Asia</button><button id="bLiq" class="tg">Liq</button><button id="bBook" class="tg">Libro</button></div>
+      <button id="bAsia" class="tg">Asia</button><button id="bLiq" class="tg">Liq</button><button id="bBook" class="tg">Libro</button>
+      <button id="bHl" class="tg" title="Posiciones reales de Hyperliquid: dónde se liquidan las más grandes">HL</button></div>
+    <div class="row"><div class="lbl">Paneles de abajo (hasta 3)</div><div id="cPanes"></div></div>
     <div class="row"><div class="lbl">Exchanges del Open Interest</div><div id="cEx"></div></div>
     <div class="row"><div class="lbl">Modelo</div><div id="cModel"></div></div>
     <div class="row"><div class="lbl">Apalancamientos</div><div id="cLev"></div></div>
@@ -107,20 +110,26 @@ const ALL = [3, 5, 10, 25, 50, 100];
 const TIER_COL = { 3: '#f472b6', 5: '#a78bfa', 10: '#4f8cff', 25: '#1fd11f', 50: '#f2ea0c', 100: '#e8140c' };
 // vista Pro: 4 colores fijos, de menos a más (turquesa, verde, amarillo, rojo)
 const PRO_COLS = ['#008f8f', '#0fbf0f', '#f0e60a', '#e8100a'];
-const MODEL_NAME = { auto: 'Auto (calibrado)', oi: 'Open Interest', vol: 'Volumen' };
+const MODEL_NAME = { auto: 'Auto (calibrado)', oi: 'Open Interest', vol: 'Volumen', hl: 'Hyperliquid real' };
 const WARM = [[0, 0, 110], [0, 150, 150], [0, 200, 0], [240, 240, 0], [255, 0, 0]];
 
-const CFG_VER = 8;
-let cfg = { ver: CFG_VER, model: 'auto', levs: [25, 50, 100], minPct: 24, view: 'pro', book: false, intensity: 1, group: null, ex: [], panes: true };
+const CFG_VER = 9;
+// paneles de abajo por defecto: en el móvil dos (liquidaciones y CVD), en pantallas anchas los tres
+function defaultPanes() { return (window.innerWidth || 1000) < 600 ? ['liq', 'cvd'] : ['doi', 'liq', 'cvd']; }
+let cfg = { ver: CFG_VER, model: 'auto', levs: [25, 50, 100], minPct: 24, view: 'pro', book: false, intensity: 1, group: null, ex: [], panes: true,
+  paneList: defaultPanes(), hl: true, hlLevs: [3, 5, 10, 25, 50, 100] };
 try {
   const saved = JSON.parse(localStorage.getItem('liq_cfg') || '{}');
-  // la v7 se conserva; la paleta fría y la vista «Limpia» ya no existen
-  if (saved.ver === 7 || saved.ver === CFG_VER) {
+  // la v7 y la v8 se conservan; la paleta fría y la vista «Limpia» ya no existen
+  if (saved.ver === 7 || saved.ver === 8 || saved.ver === CFG_VER) {
     Object.assign(cfg, saved);
     delete cfg.palette;
     if (cfg.view !== 'pro' && cfg.view !== 'full') cfg.view = 'pro';
     if (!MODEL_NAME[cfg.model]) cfg.model = 'auto';
     if (cfg.panes === undefined) cfg.panes = true;
+    if (!Array.isArray(cfg.paneList)) cfg.paneList = defaultPanes();     // de la v8: se añade el CVD
+    if (cfg.hl === undefined) cfg.hl = true;
+    if (!Array.isArray(cfg.hlLevs) || !cfg.hlLevs.length) cfg.hlLevs = [3, 5, 10, 25, 50, 100];
     cfg.ver = CFG_VER;
   }
 } catch (e) {}
@@ -154,6 +163,8 @@ let lines = [], lastSig = '', version = 0;
 let livePrice = null, previousLivePrice = null, ws = null, wsRetry = null, priceLine = null, lastLiveUi = 0;
 let wsLive = false, liveBar = null, showLiq = false, valTimer = null, zoneLines = [], tindex = {};
 let liveCursor = 0, liveBuf = [], liqHist = new Map(), doiMap = new Map(), zoneRange = null, toastBuf = {}, lastZoneLines = 0;
+let cvdD = new Map(), cvdCum = [[], []];   // CVD: delta por vela [futuros, spot] y acumulado por índice de vela
+const bHl = document.getElementById('bHl');
 
 // Hora local del dispositivo (la misma que muestra la app de Binance); los datos siguen en UTC.
 function fmtLocalFull(t) {
@@ -187,11 +198,15 @@ const series = chart.addCandlestickSeries({
   }
 });
 
-// Paneles inferiores (dibujados en el lienzo superior): Δ Open Interest y liquidaciones reales por vela
-const PANES_BOTTOM = 0.36;     // parte del alto reservada a los dos paneles
-const DOI_SHARE = 0.44;        // de ese espacio: 44 % ΔOI y 56 % liquidaciones
+// Paneles inferiores (dibujados en el lienzo superior), hasta 3 a elegir en ⚙: ΔOI, liquidaciones reales y CVD
+const PANE_IDS = ['doi', 'liq', 'cvd'];
+const PANE_NAME = { doi: 'ΔOI', liq: 'Liquidaciones', cvd: 'CVD' };
+const PANE_SPACE = [0, 0.22, 0.36, 0.48];       // parte del alto para 0, 1, 2 o 3 paneles
+function paneList() { return cfg.panes ? PANE_IDS.filter(x => cfg.paneList.includes(x)) : []; }
+function panesBottom() { return PANE_SPACE[paneList().length]; }
 function applyPanes() {
-  series.priceScale().applyOptions({ scaleMargins: cfg.panes ? { top: 0.06, bottom: PANES_BOTTOM + 0.02 } : { top: 0.08, bottom: 0.08 } });
+  const pb = panesBottom();
+  series.priceScale().applyOptions({ scaleMargins: pb ? { top: 0.06, bottom: pb + 0.02 } : { top: 0.08, bottom: 0.08 } });
   bPanes.classList.toggle('on', cfg.panes);
 }
 function paneHeight() {
@@ -199,10 +214,10 @@ function paneHeight() {
   return wrap.clientHeight - ((t.height && t.height()) || 28);
 }
 function paneGeom() {
-  const ph = paneHeight(), yA = ph * (1 - PANES_BOTTOM);
-  return { ph, yA, yB: yA + (ph - yA) * DOI_SHARE };
+  const ph = paneHeight(), list = paneList(), yA = ph * (1 - panesBottom()), hh = (ph - yA) / (list.length || 1);
+  return { ph, yA, panes: list.map((id, i) => ({ id, y0: yA + i * hh, y1: yA + (i + 1) * hh })) };
 }
-function priceBottom() { return cfg.panes ? paneGeom().yA : wrap.clientHeight; }
+function priceBottom() { return paneList().length ? paneGeom().yA : wrap.clientHeight; }
 
 // Línea de precio REAL: se crea con el primer precio conocido (nunca en 0)
 function countdown() {
@@ -251,7 +266,8 @@ function signature() {
   return [wrap.clientWidth, wrap.clientHeight,
     series.priceToCoordinate(data.price), series.priceToCoordinate(data.price * 1.01),
     ts.timeToCoordinate(cs[0].time), ts.timeToCoordinate(cs[cs.length - 1].time),
-    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.minPct, cfg.view, cfg.book, cfg.intensity, cfg.panes,
+    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.minPct, cfg.view, cfg.book, cfg.intensity, cfg.panes, cfg.hl,
+    paneList().join(','),
     Math.round((livePrice ?? data.price) / (data.heat.size || 1)), version].join('|');
 }
 
@@ -496,37 +512,133 @@ function drawPaneBars(buckets, y0, y1, upCol, dnCol, xMax, boost) {
   return vals[vals.length - 1];
 }
 
+// CVD: compras − ventas a mercado acumuladas desde la primera vela cargada (futuros de Binance y spot)
+function prepareCvd() {
+  const cum = [[], []], acc = [0, 0], seen = [false, false];
+  for (const c of data.candles) {
+    const r = cvdD.get(c.time);
+    for (const k of [0, 1]) {
+      const v = r ? r[k] : null;
+      if (v !== null && v !== undefined) { acc[k] += v; seen[k] = true; }
+      cum[k].push(seen[k] ? acc[k] : null);
+    }
+  }
+  cvdCum = cum;
+}
+let cvdLiveAt = 0;
+function setCvdLive(t, perp, now) {
+  // vela en curso: el delta de futuros llega con cada mensaje de vela del WebSocket (se repinta como mucho 1 vez por segundo)
+  if (!data || tindex[t] === undefined || !Number.isFinite(perp)) return;
+  const r = cvdD.get(t) || [null, null];
+  if (r[0] === perp) return;
+  r[0] = perp; cvdD.set(t, r);
+  now = now || Date.now();
+  if (now - cvdLiveAt < 1000) return;
+  cvdLiveAt = now; prepareCvd(); version++;
+}
+function visibleIdx(xMax) {
+  const ts = chart.timeScale(), cs = data.candles, out = [];
+  for (let i = 0; i < cs.length; i++) {
+    const x = ts.timeToCoordinate(cs[i].time);
+    if (x !== null && x >= 0 && x <= xMax) out.push([i, x]);
+  }
+  return out;
+}
+function drawLine(pts, y0, y1, col, lo, hi) {
+  if (pts.length < 2 || !(hi > lo)) return;
+  const top = y0 + 18, bot = y1 - 4, sc = (bot - top) / (hi - lo);
+  fctx.beginPath();
+  pts.forEach(([x, v], k) => { const y = bot - (v - lo) * sc; if (k) fctx.lineTo(x, y); else fctx.moveTo(x, y); });
+  fctx.strokeStyle = col; fctx.lineWidth = 1.4; fctx.stroke();
+}
+const sgnM = (x) => (x >= 0 ? '+' : '') + fmtM(x);
+const PANE_DRAW = {
+  doi(y0, y1, xMax, bs) {
+    const m = drawPaneBars(paneBuckets([...doiMap].map(([t, v]) => [t, Math.max(0, v), Math.max(0, -v)]), bs, xMax),
+      y0, y1, 'rgba(38,166,154,0.9)', 'rgba(239,83,80,0.9)', xMax, 1);
+    return { titles: data.model === 'vol'
+      ? ['Δ Open Interest (no disponible con el modelo Volumen)', 'ΔOI no disponible con el modelo Volumen', 'ΔOI: n/d (Volumen)']
+      : ['Δ Open Interest · escala log · ▲ entran posiciones  ▼ salen', 'Δ Open Interest · log · ▲ entran  ▼ salen', 'ΔOI · log · ▲ entran ▼ salen', 'ΔOI'],
+      right: m > 0 ? 'máx ' + fmtM(m) : '' };
+  },
+  liq(y0, y1, xMax, bs) {
+    const m = drawPaneBars(paneBuckets([...liqHist].map(([t, v]) => [t, v[1], v[0]]), bs, xMax),   // arriba cortos, abajo largos
+      y0, y1, 'rgba(46,196,255,0.95)', 'rgba(255,159,28,0.95)', xMax, 5);
+    const lq = data.liqs || {}, n = lq.exchanges || 8, cz = lq.cz_markets || 0;
+    const src = `${n} exchanges${cz ? ` + ${cz} vía Coinalyze` : ''}`;
+    return { titles: [`Liquidaciones reales (${src}) · escala log · ▲ cortos  ▼ largos`, `Liquidaciones reales (${src}) · log · ▲ cortos ▼ largos`,
+      'Liquidaciones reales · log · ▲ cortos  ▼ largos', 'Liq. reales · log · ▲ cortos ▼ largos', 'Liq. reales'], right: m > 0 ? 'máx ' + fmtM(m) : '' };
+  },
+  cvd(y0, y1, xMax) {
+    // cada línea con su propia escala: futuros mueve mucho más dinero que spot
+    const vis = visibleIdx(xMax), dd = [null, null];
+    for (const [k, col] of [[1, '#b388ff'], [0, '#e8e8e8']]) {
+      const pts = vis.filter(([i]) => cvdCum[k][i] !== null && cvdCum[k][i] !== undefined).map(([i, x]) => [x, cvdCum[k][i]]);
+      if (pts.length < 2) continue;
+      let lo = Infinity, hi = -Infinity;
+      for (const [, v] of pts) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+      drawLine(pts, y0, y1, col, lo, hi);
+      dd[k] = pts[pts.length - 1][1] - pts[0][1];
+    }
+    const f = dd[0] === null ? '–' : sgnM(dd[0]), sp = dd[1] === null ? '–' : sgnM(dd[1]);
+    return { titles: [`CVD (compras − ventas a mercado) · blanco: futuros ${f} · violeta: spot ${sp}`, `CVD · blanco futuros ${f} · violeta spot ${sp}`,
+      `CVD · fut. ${f} · spot ${sp}`, `CVD fut. ${f}`, 'CVD'], right: '' };
+  }
+};
+
 function drawPanes(w) {
-  if (!cfg.panes) return;
-  const { ph, yA, yB } = paneGeom();
+  const geo = paneGeom();
+  if (!geo.panes.length) return;
   const ps = chart.priceScale('right');
   const pw = (ps && ps.width && ps.width()) || 62;
   const xMax = w - pw;
   // fondo propio: el eje de precios no vale para los paneles
   fctx.fillStyle = 'rgba(0,0,0,0.55)';
-  fctx.fillRect(0, yA, xMax, ph - yA);
+  fctx.fillRect(0, geo.yA, xMax, geo.ph - geo.yA);
   fctx.fillStyle = '#000';
-  fctx.fillRect(xMax, yA, pw, ph - yA);
+  fctx.fillRect(xMax, geo.yA, pw, geo.ph - geo.yA);
   fctx.fillStyle = 'rgba(43,53,80,0.95)';
-  fctx.fillRect(0, Math.round(yA), w, 1);
-  fctx.fillRect(0, Math.round(yB), w, 1);
+  for (const p of geo.panes) fctx.fillRect(0, Math.round(p.y0), w, 1);
   const bs = chart.timeScale().options().barSpacing;
-  const doiB = paneBuckets([...doiMap].map(([t, v]) => [t, Math.max(0, v), Math.max(0, -v)]), bs, xMax);
-  const liqB = paneBuckets([...liqHist].map(([t, v]) => [t, v[1], v[0]]), bs, xMax);   // arriba cortos, abajo largos
-  const mD = drawPaneBars(doiB, yA, yB, 'rgba(38,166,154,0.9)', 'rgba(239,83,80,0.9)', xMax, 1);
-  const mL = drawPaneBars(liqB, yB, ph, 'rgba(46,196,255,0.95)', 'rgba(255,159,28,0.95)', xMax, 5);
-  fctx.font = '11px system-ui, sans-serif';
-  fctx.fillStyle = '#8b95ab';
   const room = xMax - 14;   // el título no pisa el «máx» del eje
-  const fit = (opts) => opts.find(t => fctx.measureText(t).width <= room) || opts[opts.length - 1];
-  fctx.fillText(fit(data.model === 'vol'
-    ? ['Δ Open Interest (no disponible con el modelo Volumen)', 'ΔOI no disponible con el modelo Volumen', 'ΔOI: n/d (Volumen)']
-    : ['Δ Open Interest · escala log · ▲ entran posiciones  ▼ salen', 'Δ Open Interest · log · ▲ entran  ▼ salen', 'ΔOI · log · ▲ entran ▼ salen', 'ΔOI']), 8, yA + 13);
-  fctx.fillText(fit(['Liquidaciones reales (5 exchanges) · escala log · ▲ cortos  ▼ largos', 'Liquidaciones reales · log · ▲ cortos  ▼ largos',
-    'Liq. reales · log · ▲ cortos ▼ largos', 'Liq. reales']), 8, yB + 13);
+  for (const p of geo.panes) {
+    const r = PANE_DRAW[p.id](p.y0, p.y1, xMax, bs);
+    fctx.font = '11px system-ui, sans-serif';
+    fctx.fillStyle = '#8b95ab';
+    fctx.fillText(r.titles.find(t => fctx.measureText(t).width <= room) || r.titles[r.titles.length - 1], 8, p.y0 + 13);
+    fctx.font = '10px system-ui, sans-serif';
+    if (r.right) fctx.fillText(r.right, xMax + 4, p.y0 + 13);
+  }
+}
+
+// Hyperliquid real: las posiciones más grandes y su precio de liquidación exacto, a la derecha de la última vela
+function drawHl(w, h) {
+  if (!cfg.hl || !data || !data.hl || !data.hl.top || !data.hl.top.length) return;
+  const ts = chart.timeScale(), cs = data.candles;
+  const ps = chart.priceScale('right');
+  const xEnd = w - ((ps && ps.width && ps.width()) || 62) - 4;
+  const xl = ts.timeToCoordinate(cs[cs.length - 1].time);
+  const x0 = xl === null ? xEnd - 160 : Math.max(0, Math.min(xEnd - 60, xl + 6));
   fctx.font = '10px system-ui, sans-serif';
-  if (mD > 0) fctx.fillText('máx ' + fmtM(mD), xMax + 4, yA + 13);
-  if (mL > 0) fctx.fillText('máx ' + fmtM(mL), xMax + 4, yB + 13);
+  const used = [];
+  // la cabecera (arriba a la izquierda) puede tapar rótulos en el móvil: ahí solo la línea
+  const info = document.getElementById('info');
+  const iy = (info.offsetTop || 8) + (info.offsetHeight || 0) + 4, ix = (info.offsetLeft || 10) + (info.offsetWidth || 0);
+  // de mayor a menor: si dos quedan pegadas, el rótulo es para la más grande y la otra solo lleva la línea
+  const items = data.hl.top.filter(it => it[2] >= 100000).sort((a, b) => b[2] - a[2]).slice(0, 6)
+    .map(it => [series.priceToCoordinate(it[0]), it]).filter(([y]) => y !== null && y >= 0 && y <= h);
+  for (const [y, [, side, usd, lev]] of items) {
+    const col = side === 1 ? '#ff9f1c' : '#2ec4ff';
+    fctx.setLineDash([4, 3]); fctx.strokeStyle = col; fctx.lineWidth = 1.2;
+    fctx.beginPath(); fctx.moveTo(x0, y); fctx.lineTo(xEnd, y); fctx.stroke(); fctx.setLineDash([]);
+    if (used.some(u => Math.abs(u - y) < 13)) continue;
+    const label = `HL ${side === 1 ? 'largo' : 'corto'} ${fmtM(usd)} · ${Math.round(lev)}x`;
+    const tw = fctx.measureText(label).width;
+    if (y < iy && xEnd - tw - 6 < ix) continue;
+    used.push(y);
+    fctx.fillStyle = 'rgba(0,0,0,0.78)'; fctx.fillRect(xEnd - tw - 6, y - 12, tw + 6, 12);
+    fctx.fillStyle = col; fctx.fillText(label, xEnd - tw - 3, y - 3);
+  }
 }
 
 function render() {
@@ -554,6 +666,7 @@ function render() {
   fctx.save(); fctx.beginPath(); fctx.rect(0, 0, w, yMax); fctx.clip();
   drawLiqs(w, yMax);
   drawBook(w, yMax);
+  drawHl(w, yMax);
   fctx.restore();
   drawPanes(w);
 }
@@ -571,7 +684,8 @@ function updateHeader() {
   if (cfg.view === 'pro') {
     const mxp = proMax();
     const exTxt = data.ex && data.ex.length ? data.ex.map(x => x.toUpperCase()).join('+') : 'todos';
-    hdr.textContent = `BINANCE:${data.symbol} · ${tf} · Pools ${data.levs.map(l => l + 'X').join('+')} · Total ≥ ${fmtM((cfg.minPct / 100) * mxp)} · maxHeat ${fmtM(mxp)} · OI: ${exTxt}`;
+    const what = data.model === 'hl' ? `Hyperliquid real (${(data.hl && data.hl.positions) || 0} posiciones)` : `OI: ${exTxt}`;
+    hdr.textContent = `BINANCE:${data.symbol} · ${tf} · Pools ${data.levs.map(l => l + 'X').join('+')} · Total ≥ ${fmtM((cfg.minPct / 100) * mxp)} · maxHeat ${fmtM(mxp)} · ${what}`;
     return;
   }
   const mname = data.model === 'auto' ? (data.calib && data.calib.params ? 'Auto (calibrado)' : 'Auto (sin calibrar aún)') : (MODEL_NAME[data.model] || data.model);
@@ -673,16 +787,18 @@ function updateStatus() {
   const hora = new Date(data.updated * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
   const current = livePrice ?? data.price;
   const liveClass = wsLive ? 'price-live' : 'price-offline';
-  const srcTxt = data.model === 'vol' ? 'volumen' : `${data.used.length} fuentes`;
+  const real = data.model === 'hl';
+  const srcTxt = data.model === 'vol' ? 'volumen' : real ? `${(data.hl && data.hl.positions) || 0} posiciones` : `${data.used.length} fuentes`;
   const c = data.ctx || {}, oi = data.oi;
-  st.innerHTML = `<span class="src">estimado</span> · ${srcTxt} · ${hora}<br>` +
+  st.innerHTML = (real ? '<span class="src" style="color:#ff6fd8">real · Hyperliquid</span>' : '<span class="src">estimado</span>') + ` · ${srcTxt} · ${hora}<br>` +
     `<span class="${liveClass}">${fmtLive(current)}</span>` +
     (c.chg24 !== undefined ? ` <span class="${c.chg24 >= 0 ? 'rt' : 'err'}">${c.chg24 >= 0 ? '+' : ''}${c.chg24.toFixed(2).replace('.', ',')}% 24h</span>` : '') +
     (oi && oi.usd ? `<br><span class="muted2">OI ${fmtM(oi.usd)}` +
       (oi.chg24 !== null && oi.chg24 !== undefined ? ` (${oi.chg24 >= 0 ? '+' : ''}${oi.chg24.toFixed(1).replace('.', ',')}% 24h)` : '') + '</span>' : '') +
     (c.mark ? `<br><span class="muted2">marca ${fmtLive(c.mark)}</span>` : '') + '<br>' +
     (wsLive ? '<span class="rt">● LIVE</span>' : '<span class="err">● OFFLINE</span>') +
-    (data.note ? `<br><span class="err">${String(data.note).slice(0, 70)}</span>` : '');
+    (data.note ? `<br><span class="err">${esc(String(data.note).slice(0, 70))}</span>` : '') +
+    ((data.credits || []).includes('coinalyze') ? '<br><a href="https://coinalyze.net" target="_blank" rel="noopener">datos extra: Coinalyze</a>' : '');
 }
 
 // ───── precio en directo (WebSocket de Binance Futures)
@@ -719,6 +835,7 @@ function onKline(k) {
   const t = Math.floor(k.t / 1000);
   if (liveBar && t < liveBar.time) return;
   liveBar = { time: t, open: +k.o, high: +k.h, low: +k.l, close: +k.c };
+  if (k.q !== undefined && k.Q !== undefined) setCvdLive(t, 2 * +k.Q - +k.q);   // compras − ventas a mercado (USD)
   flushLive(false);
 }
 
@@ -757,7 +874,9 @@ function scheduleReconnect() {
   wsRetry = setTimeout(() => { wsRetry = null; connectBinance(); }, 3000);
 }
 
-const EX_NAME = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', deribit: 'Deribit', bitmex: 'BitMEX', hyperliquid: 'Hyperliquid', bitget: 'Bitget' };
+const EX_NAME = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', deribit: 'Deribit', bitmex: 'BitMEX', hyperliquid: 'Hyperliquid', bitget: 'Bitget',
+  gate: 'Gate', htx: 'HTX', otros: 'Otros (Coinalyze)' };
+const LIQ_EX = ['binance', 'bybit', 'okx', 'deribit', 'bitmex', 'bitget', 'gate', 'htx'];
 const TOAST_MIN = 250000, PULSE_MIN = 50000;
 
 function applyLiveLiq(ev, fresh) {
@@ -821,7 +940,7 @@ function flushToast(side) {
 
 async function load() {
   try {
-    const q = `tf=${tf}&model=${cfg.model}&lev=${cfg.levs.join(',')}` + (cfg.view === 'pro' ? '&bin=' + binParam() : '') +
+    const q = `tf=${tf}&model=${cfg.model}&lev=${curLevs().join(',')}` + (cfg.view === 'pro' ? '&bin=' + binParam() : '') +
       (cfg.ex.length ? '&ex=' + cfg.ex.join(',') : '') + (K ? '&k=' + encodeURIComponent(K) : '');
     const r = await fetch('/api/data?' + q, { cache: 'no-store' });
     const d = await r.json();
@@ -832,6 +951,9 @@ async function load() {
     doiMap = new Map((d.doi || []).map(([t, v]) => [t, v]));
     liqHist = new Map(((d.liqs && d.liqs.hist) || []).map(([t, L, S]) => [t, [L, S]]));
     for (const ev of liveBuf) applyLiveLiq(ev, false);   // lo llegado en directo después de los datos del servidor
+    tindex = {}; d.candles.forEach((c, i) => { tindex[c.time] = i; });
+    cvdD = new Map((d.cvd || []).map(([t, f, sp]) => [t, [f, sp]]));
+    prepareCvd();
     // línea de precio inmediata con el último precio conocido
     const lc = d.candles[d.candles.length - 1];
     if (!liveBar || liveBar.time < lc.time) liveBar = { ...lc };
@@ -848,7 +970,6 @@ async function load() {
     }
     version++;
     lastKnownPrice = d.price;
-    tindex = {}; d.candles.forEach((c, i) => { tindex[c.time] = i; });
     if (d.heat && d.heat.active) d.profAct = smoothActive(d.heat.active, d.heat.size);
     updateAsia(); updateZones(); updateZoneLines(); updateStatus(); updateHeader(); updateBias(); buildCfg(); syncPools();
     if (valEl.style.display === 'block' && first === false && valEl.dataset.tf !== tf) { valEl.dataset.tf = tf; loadVal(); }
@@ -874,14 +995,15 @@ function buildCfg() {
     cfg.view = v; saveCfg(); version++; updateZoneLines(); updateHeader(); if (livePrice !== null) setPriceLine(livePrice); buildCfg();
     if (reload) { first = true; data = null; lastSig = ''; load(); }
   })));
-  const exs = (data && data.exchanges) || Object.keys(EX_NAME);
+  const hasCz = Object.keys((data && data.labels) || {}).some(k => k.startsWith('cz'));
+  const exs = ((data && data.exchanges) || Object.keys(EX_NAME)).filter(x => x !== 'otros' || hasCz);
   const ce = document.getElementById('cEx'); ce.innerHTML = '';
   ce.appendChild(chip('Todos', !cfg.ex.length, () => { cfg.ex = []; saveCfg(); data = null; lastSig = ''; load(); }));
   exs.forEach(x => ce.appendChild(chip(EX_NAME[x] || x, cfg.ex.includes(x), () => {
     cfg.ex = cfg.ex.includes(x) ? cfg.ex.filter(y => y !== x) : cfg.ex.concat(x);
     saveCfg(); data = null; lastSig = ''; load();
   })));
-  const models = (data && data.models) || ['auto', 'oi', 'vol'];
+  const models = (data && data.models) || ['auto', 'oi', 'vol', 'hl'];
   const cm = document.getElementById('cModel'); cm.innerHTML = '';
   models.forEach(m => cm.appendChild(chip(MODEL_NAME[m], cfg.model === m, () => { cfg.model = m; saveCfg(); data = null; lastSig = ''; load(); })));
   const cl = document.getElementById('cLev'); cl.innerHTML = '';
@@ -890,10 +1012,17 @@ function buildCfg() {
     d0.className = 'muted2';
     d0.textContent = data && data.levs && data.levs.length ? `Elegidos solos: ${data.levs.join('x · ')}x` : 'Los elige la calibración';
     cl.appendChild(d0);
-  } else ALL.forEach(l => cl.appendChild(chip(l + 'x', cfg.levs.includes(l), () => {
-    const next = cfg.levs.includes(l) ? cfg.levs.filter(x => x !== l) : cfg.levs.concat(l).sort((a, b) => a - b);
+  } else ALL.forEach(l => cl.appendChild(chip(l + 'x', curLevs().includes(l), () => {
+    const cur = curLevs();
+    const next = cur.includes(l) ? cur.filter(x => x !== l) : cur.concat(l).sort((a, b) => a - b);
     if (!next.length) return;
-    cfg.levs = next; saveCfg(); data = null; lastSig = ''; load();
+    setLevs(next); saveCfg(); data = null; lastSig = ''; load();
+  })));
+  const cp = document.getElementById('cPanes'); cp.innerHTML = '';
+  PANE_IDS.forEach(id => cp.appendChild(chip(PANE_NAME[id], cfg.paneList.includes(id), () => {
+    cfg.paneList = cfg.paneList.includes(id) ? cfg.paneList.filter(x => x !== id) : cfg.paneList.concat(id);
+    if (cfg.paneList.length) cfg.panes = true;
+    saveCfg(); applyPanes(); version++; buildCfg();
   })));
   document.getElementById('cMin').value = cfg.minPct;
   document.getElementById('cMinV').textContent = cfg.minPct;
@@ -909,7 +1038,7 @@ bCfg.onclick = () => {
 };
 
 // ───── validez: comparación con liquidaciones reales
-const MODEL_LABEL = { auto: 'Auto (calibrado)', oi: 'Open Interest (tus ajustes)', vol: 'Volumen' };
+const MODEL_LABEL = { auto: 'Auto (calibrado)', oi: 'Open Interest (tus ajustes)', vol: 'Volumen', hl: 'Hyperliquid real (posiciones de verdad)' };
 function pct(x) { return x === null || x === undefined ? '–' : Math.round(x * 100) + '%'; }
 function esc(x) { return String(x).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
 const CG_ADDS = { Professional: 'su heatmap y su mapa de liquidaciones, para compararlos con el nuestro',
@@ -926,6 +1055,25 @@ function cgBlock(g) {
   return `<h4>CoinGlass</h4>${head}
     <div>${(g.checks || []).map(c => `${c.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'} ${esc(c.name)}`).join(' · ')}</div>
     ${when ? `<div class="muted">Comprobado a las ${when} · se repite cada 6 h.</div>` : ''}`;
+}
+function hlBlock(v) {
+  const h = v.hl, c = v.hl_compare;
+  if (!h || h.enabled === false) return '';
+  const out = ['<h4>Hyperliquid real</h4>'];
+  if (!h.positions) out.push(`<div class="muted">Buscando posiciones… (${h.tracked || 0} direcciones en cola)</div>`);
+  else out.push(`<div><b>${h.positions}</b> posiciones de BTC con su precio de liquidación exacto · largos <b>${pct(h.long_pct)}</b>` +
+    (h.coverage ? ` · cubren el <b>${pct(h.coverage)}</b> del OI de Hyperliquid` : '') + '</div>');
+  if (c) out.push(`<div>¿El mapa estimado marca dónde están? <b>${pct(c.match)}</b> <span class="muted">(azar: ${pct(c.base)})</span> · ${verdict(c.lift)}</div>`);
+  out.push('<div class="muted">Solo Hyperliquid (no todo el mercado), pero son posiciones reales, no estimadas. Capa «HL» y modelo «Hyperliquid real» en ⚙.</div>');
+  return out.join('');
+}
+function czBlock(z) {
+  if (z === undefined) return '';
+  if (!z) return '<h4>Coinalyze</h4><div class="muted">Sin clave (es gratis en coinalyze.net). Con ella se añade el OI con histórico de más exchanges y sus liquidaciones por vela.</div>';
+  return `<h4>Coinalyze</h4><div>OI con histórico: ${(z.oi_markets || []).map(esc).join(' · ') || '–'}</div>
+    <div>Liquidaciones por vela de ${z.liq_markets || 0} mercados</div>` +
+    (z.last_error ? `<div class="bad">Último error: ${esc(z.last_error)}</div>` : '') +
+    '<div class="muted">Datos de <a href="https://coinalyze.net" target="_blank" rel="noopener" style="color:#7fb0ff">Coinalyze</a></div>';
 }
 function times(x) { return x === null || x === undefined ? '–' : x.toFixed(1).replace('.', ',') + '×'; }
 function verdict(lift) {
@@ -966,10 +1114,13 @@ function renderVal(v) {
   const c = (data && data.ctx) || {};
   const lq = (data && data.liqs) || {};
   const SRC_NAME = { binance: 'Binance USDT', binance_usdc: 'Binance USDC', binance_coinm: 'Binance COIN-M', bybit: 'Bybit',
-    okx_usdt: 'OKX USDT', okx_usd: 'OKX USD', hyperliquid: 'Hyperliquid', bitget: 'Bitget', deribit: 'Deribit', bitmex: 'BitMEX', volumen: 'Volumen' };
+    okx_usdt: 'OKX USDT', okx_usd: 'OKX USD', hyperliquid: 'Hyperliquid', bitget: 'Bitget', deribit: 'Deribit', bitmex: 'BitMEX', volumen: 'Volumen',
+    hyperliquid_real: 'Posiciones reales de Hyperliquid' };
+  const lbl = (data && data.labels) || {};
+  const srcName = (u) => u.startsWith('cz') ? esc(lbl[u] || u) : (SRC_NAME[u] || esc(u)) + (lbl[u] ? ' (Coinalyze)' : '');
   if (data && data.used) parts.push(`<h4>Fuentes de Open Interest (${data.used.length})</h4>
-    <div>${data.used.map(u => SRC_NAME[u] || u).join(' · ')}</div>
-    <div class="muted">Hyperliquid, Bitget, Deribit y BitMEX no publican histórico: se graban cada minuto y suman datos con el paso de las horas.</div>`);
+    <div>${data.used.map(srcName).join(' · ')}</div>
+    <div class="muted">Hyperliquid, Bitget, Deribit y BitMEX no publican histórico: se graban cada minuto${Object.keys(lbl).length ? ' (o llegan de Coinalyze con histórico)' : ''}.</div>`);
   parts.push(`<h4>Contexto del mercado</h4>
     <div>Funding: <b>${c.funding !== undefined ? (c.funding * 100).toFixed(4) + '%' : '–'}</b> <span class="muted">(positivo: pagan los largos)</span></div>
     <div>Largos/cortos (cuentas): <b>${c.ls_accounts ? c.ls_accounts.toFixed(2) : '–'}</b>${c.long_pct ? ` <span class="muted">(${Math.round(c.long_pct * 100)}% en largo)</span>` : ''}</div>
@@ -977,10 +1128,10 @@ function renderVal(v) {
     <div>Liquidado 24 h: <span class="L">largos ${fmtM(lq.long_24h || 0)}</span> · <span class="S">cortos ${fmtM(lq.short_24h || 0)}</span></div>`);
   const col = v.collectors || {};
   const dot = (x) => x && x.connected ? '<span class="ok">●</span>' : '<span class="bad">●</span>';
-  parts.push(`<h4>Recogida de liquidaciones reales</h4>
-    <div>${['binance', 'bybit', 'okx', 'deribit', 'bitmex'].map(ex => `${dot(col[ex])} ${EX_NAME[ex]}`).join(' · ')}</div>
+  parts.push(`<h4>Recogida de liquidaciones reales (${LIQ_EX.length} exchanges)</h4>
+    <div>${LIQ_EX.map(ex => `${dot(col[ex])} ${EX_NAME[ex]}`).join(' · ')}</div>
     <div class="muted">Guardadas: ${(v.db && v.db.events) || 0} · escuchando ${String((v.db && v.db.hours_listening) || 0).replace('.', ',')} h en total</div>
-    ${cgBlock(v.coinglass)}
+    ${hlBlock(v)}${czBlock(v.coinalyze)}${cgBlock(v.coinglass)}
     <h4>Cómo leerlo</h4>
     <div class="muted">Acierto: % del dinero liquidado que cayó en una zona que el heatmap ya marcaba antes. Azar: lo que se acertaría con un precio cualquiera cercano. Burbuja <span class="L">naranja</span> = largos liquidados, <span class="S">cian</span> = cortos. Binance solo envía una muestra (1 por segundo).</div>`);
   valEl.innerHTML = parts.join('');
@@ -1032,6 +1183,11 @@ bAsia.onclick = () => { showAsia = !showAsia; bAsia.classList.toggle('on', showA
 bZones.onclick = () => { showZones = !showZones; bZones.classList.toggle('on', showZones); updateZones(); updateZoneLines(); };
 bProf.onclick = () => { showProf = !showProf; bProf.classList.toggle('on', showProf); };
 bPanes.onclick = () => { cfg.panes = !cfg.panes; saveCfg(); applyPanes(); version++; };
+bHl.classList.toggle('on', cfg.hl);
+bHl.onclick = () => { cfg.hl = !cfg.hl; saveCfg(); bHl.classList.toggle('on', cfg.hl); version++; };
+// apalancamientos: el modelo real de Hyperliquid tiene los suyos (por defecto todos)
+function curLevs() { return cfg.model === 'hl' ? cfg.hlLevs : cfg.levs; }
+function setLevs(v) { if (cfg.model === 'hl') cfg.hlLevs = v; else cfg.levs = v; }
 
 const POOL_TIERS = [3, 5, 10, 25, 50, 100];
 function poolReadout(price) {
@@ -1060,9 +1216,11 @@ function paneReadout(t) {
   const el = document.getElementById('pAt');
   if (!t || !data) { el.textContent = ''; return; }
   const parts = [];
-  const d = doiMap.get(t), hv = liqHist.get(t);
+  const d = doiMap.get(t), hv = liqHist.get(t), cd = cvdD.get(t);
   if (d !== undefined) parts.push(`ΔOI ${d >= 0 ? '+' : ''}${fmtM(d)}`);
   if (hv && (hv[0] || hv[1])) parts.push(`liquidado: largos ${fmtM(hv[0])} · cortos ${fmtM(hv[1])}`);
+  if (cd && paneList().includes('cvd') && (cd[0] !== null || cd[1] !== null))
+    parts.push(`delta: fut. ${cd[0] === null ? '–' : sgnM(cd[0])} · spot ${cd[1] === null ? '–' : sgnM(cd[1])}`);
   el.textContent = parts.join(' · ');
 }
 chart.subscribeCrosshairMove((param) => {
@@ -1073,7 +1231,7 @@ chart.subscribeCrosshairMove((param) => {
 
 function syncPools() {
   const auto = cfg.model === 'auto';
-  const levs = auto && data && data.levs ? data.levs : cfg.levs;
+  const levs = auto && data && data.levs ? data.levs : curLevs();
   document.querySelectorAll('input[data-pool]').forEach(cb => { cb.checked = levs.includes(+cb.dataset.pool); });
   document.getElementById('bAuto').classList.toggle('on', auto);
   document.getElementById('pInt').value = cfg.intensity || 1;
@@ -1088,12 +1246,13 @@ function syncPools() {
 }
 document.querySelectorAll('input[data-pool]').forEach(cb => {
   cb.onchange = () => {
-    // elegir pools a mano = modelo Open Interest con esos apalancamientos
-    const base = cfg.model === 'auto' && data && data.levs ? data.levs.slice() : cfg.levs.slice();
+    // elegir pools a mano = modelo Open Interest con esos apalancamientos (en el modelo real: filtra sus posiciones)
+    const base = cfg.model === 'auto' && data && data.levs ? data.levs.slice() : curLevs().slice();
     const t = +cb.dataset.pool;
     const next = cb.checked ? Array.from(new Set(base.concat(t))).sort((a, b) => a - b) : base.filter(x => x !== t);
     if (!next.length) { cb.checked = true; return; }
-    cfg.levs = next; cfg.model = 'oi'; saveCfg(); data = null; lastSig = ''; syncPools(); load();
+    if (cfg.model !== 'hl') cfg.model = 'oi';
+    setLevs(next); saveCfg(); data = null; lastSig = ''; syncPools(); load();
   };
 });
 document.getElementById('bAuto').onclick = () => { cfg.model = 'auto'; saveCfg(); data = null; lastSig = ''; syncPools(); load(); };
