@@ -88,6 +88,7 @@ def pick_markets(exchanges, markets, oi_now):
     """Elige qué pedir: el OI de los que solo grabamos y de los MAX_EXTRA con más OI que no tenemos;
     las liquidaciones de los nuestros (para rellenar huecos) y de los que no escuchamos (hasta 20 en total)."""
     names = {e.get("code"): norm_ex(e.get("name")) for e in exchanges if isinstance(e, dict)}
+    shown = {e.get("code"): str(e.get("name") or "") for e in exchanges if isinstance(e, dict)}   # «HTX», «WOO X», «dYdX»
     btc = []
     for m in markets:
         if not isinstance(m, dict) or not m.get("is_perpetual") or str(m.get("base_asset", "")).upper() not in ("BTC", "XBT"):
@@ -95,7 +96,8 @@ def pick_markets(exchanges, markets, oi_now):
         ex = names.get(m.get("exchange")) or norm_ex(m.get("exchange"))
         key = (ex, norm_sym(m.get("symbol_on_exchange")))
         btc.append({"symbol": m.get("symbol"), "ex": ex, "key": key,
-                    "label": f"{ex.capitalize()} {m.get('symbol_on_exchange')}", "oi": float(oi_now.get(m.get("symbol")) or 0)})
+                    "label": f"{shown.get(m.get('exchange')) or ex.capitalize()} {m.get('symbol_on_exchange')}",
+                    "oi": float(oi_now.get(m.get("symbol")) or 0)})
     btc.sort(key=lambda x: -x["oi"])
     repl = [m for m in btc if m["key"] in SNAP_OI]
     extra = [m for m in btc if m["key"] not in OWN_OI and m["key"] not in SNAP_OI and m["oi"] > 0][:MAX_EXTRA]
@@ -233,6 +235,7 @@ def status():
         st["oi_markets"] = [m["label"] for m in STATE["oi"]]
         st["liq_markets"] = len(STATE["liq"])
         st["btc_markets"] = len(STATE["markets"])
+        st["all"] = [f"{m['label']} [{m['key'][0]}:{m['key'][1]}] {round(m.get('oi') or 0) / 1e9:.2f}B" for m in STATE["markets"]]
         st["updated"] = {tf: int(v["at"]) for tf, v in STATE["data"].items()}
         st["calls_last_min"] = len([t for t in STATE["calls"] if time.time() - t < 60])
     return st
