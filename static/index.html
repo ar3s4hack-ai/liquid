@@ -20,6 +20,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 #pools input[type=range]{width:90px;accent-color:#f0e60a}
 #pools .grad{width:44px;height:8px;border-radius:3px;background:linear-gradient(90deg,#008f8f,#0fbf0f,#f0e60a,#e8100a)}
 #pools button{padding:2px 8px;font-size:12px}
+#pools input.low{border:2px solid #f0e60a;background:#2a2600;color:#fff}
 #st{margin-left:auto;font-size:11px;text-align:right;line-height:1.3;min-width:150px}
 #wrap{position:absolute;left:0;right:0;bottom:0;top:90px}
 #heat,#chart{position:absolute;inset:0;width:100%;height:100%}
@@ -177,6 +178,7 @@ const chart = LightweightCharts.createChart(document.getElementById('chart'), {
 const series = chart.addCandlestickSeries({
   upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
   wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  lastValueVisible: false, priceLineVisible: false,   // la línea «BTC» propia ya marca el precio
   // el encuadre automático incluye las zonas fuertes cercanas, no solo las velas
   autoscaleInfoProvider: (original) => {
     const r = original();
@@ -185,25 +187,22 @@ const series = chart.addCandlestickSeries({
   }
 });
 
-// Paneles inferiores: Δ Open Interest por vela y liquidaciones reales por vela (5 exchanges)
-const PANES_BOTTOM = 0.30;
-const DOI_TOP = 0.73, LIQ_TOP = 0.865;
-const histOpts = { priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false };
-const doiSeries = chart.addHistogramSeries({ ...histOpts, priceScaleId: 'doi' });
-const liqLSeries = chart.addHistogramSeries({ ...histOpts, priceScaleId: 'liq', color: 'rgba(255,159,28,0.9)' });
-const liqSSeries = chart.addHistogramSeries({ ...histOpts, priceScaleId: 'liq', color: 'rgba(46,196,255,0.9)' });
+// Paneles inferiores (dibujados en el lienzo superior): Δ Open Interest y liquidaciones reales por vela
+const PANES_BOTTOM = 0.36;     // parte del alto reservada a los dos paneles
+const DOI_SHARE = 0.44;        // de ese espacio: 44 % ΔOI y 56 % liquidaciones
 function applyPanes() {
   series.priceScale().applyOptions({ scaleMargins: cfg.panes ? { top: 0.06, bottom: PANES_BOTTOM + 0.02 } : { top: 0.08, bottom: 0.08 } });
-  chart.priceScale('doi').applyOptions({ scaleMargins: { top: DOI_TOP, bottom: 1 - LIQ_TOP + 0.02 } });
-  chart.priceScale('liq').applyOptions({ scaleMargins: { top: LIQ_TOP, bottom: 0 } });
-  for (const x of [doiSeries, liqLSeries, liqSSeries]) x.applyOptions({ visible: cfg.panes });
   bPanes.classList.toggle('on', cfg.panes);
 }
 function paneHeight() {
   const t = chart.timeScale();
   return wrap.clientHeight - ((t.height && t.height()) || 28);
 }
-function priceBottom() { return cfg.panes ? paneHeight() * (1 - PANES_BOTTOM) : wrap.clientHeight; }
+function paneGeom() {
+  const ph = paneHeight(), yA = ph * (1 - PANES_BOTTOM);
+  return { ph, yA, yB: yA + (ph - yA) * DOI_SHARE };
+}
+function priceBottom() { return cfg.panes ? paneGeom().yA : wrap.clientHeight; }
 
 // Línea de precio REAL: se crea con el primer precio conocido (nunca en 0)
 function countdown() {
@@ -463,34 +462,71 @@ function drawLiqs(w, h) {
   }
 }
 
-function drawPaneFrames(w) {
+function paneBuckets(entries, bs, xMax) {
+  // velas de ≥ 3 px: una barra por vela, centrada en ella; más finas: se suman por columnas de 3 px para que se vean
+  const ts = chart.timeScale(), out = new Map(), col = bs >= 3 ? 0 : 3;
+  const wid = col ? col - 0.6 : Math.max(1.5, bs * 0.7);
+  for (const [t, up, dn] of entries) {
+    const x = ts.timeToCoordinate(t);
+    if (x === null || x < 0 || x > xMax) continue;
+    const left = col ? Math.floor(x / col) * col : x - wid / 2, b = out.get(left) || [0, 0, wid];
+    b[0] += up; b[1] += dn;
+    out.set(left, b);
+  }
+  return out;
+}
+
+function drawPaneBars(buckets, y0, y1, upCol, dnCol, xMax, boost) {
+  // escala logarítmica centrada en cero: una cascada enorme ya no aplasta al resto
+  const top = y0 + 18, bot = y1 - 3, zero = Math.round((top + bot) / 2), half = (bot - top) / 2;
+  fctx.fillStyle = 'rgba(43,53,80,0.8)';
+  fctx.fillRect(0, zero, xMax, 1);
+  const vals = [];
+  for (const [u, d] of buckets.values()) { if (u > 0) vals.push(u); if (d > 0) vals.push(d); }
+  if (!vals.length) return 0;
+  vals.sort((p, q) => p - q);
+  const unit = Math.max(1, vals[Math.floor(vals.length / 2)] / boost);   // boost alto = lo pequeño se ve más
+  const f = (v) => Math.log10(1 + v / unit), m = f(vals[vals.length - 1]);
+  for (const [left, [u, d, wid]] of buckets) {
+    const x = Math.max(0, left), bwid = Math.min(left + wid, xMax) - x;   // sin pisar el eje de precios
+    if (bwid <= 0) continue;
+    if (u > 0) { const hgt = Math.max(1.5, f(u) / m * half); fctx.fillStyle = upCol; fctx.fillRect(x, zero - hgt, bwid, hgt); }
+    if (d > 0) { const hgt = Math.max(1.5, f(d) / m * half); fctx.fillStyle = dnCol; fctx.fillRect(x, zero + 1, bwid, hgt); }
+  }
+  return vals[vals.length - 1];
+}
+
+function drawPanes(w) {
   if (!cfg.panes) return;
-  const ph = paneHeight();
-  const yA = ph * (1 - PANES_BOTTOM), yB = ph * (LIQ_TOP - 0.01);   // separadores: precio | ΔOI | liquidaciones
-  fctx.fillStyle = 'rgba(43,53,80,0.9)';
-  fctx.fillRect(0, Math.round(yA), w, 1);
-  fctx.fillRect(0, Math.round(yB), w, 1);
-  fctx.font = '11px system-ui, sans-serif';
-  fctx.fillStyle = '#8b95ab';
-  const noOi = data.model === 'vol';
-  fctx.fillText(noOi ? 'Δ Open Interest (no disponible con el modelo Volumen)' : 'Δ Open Interest · verde: entran posiciones · rojo: salen', 8, yA + 13);
-  fctx.fillText('Liquidaciones reales (5 exchanges) · ▲ cortos  ▼ largos', 8, yB + 13);
-  // el eje de precios no vale para los paneles: se tapa y se pone el máximo visible de cada panel
+  const { ph, yA, yB } = paneGeom();
   const ps = chart.priceScale('right');
   const pw = (ps && ps.width && ps.width()) || 62;
+  const xMax = w - pw;
+  // fondo propio: el eje de precios no vale para los paneles
+  fctx.fillStyle = 'rgba(0,0,0,0.55)';
+  fctx.fillRect(0, yA, xMax, ph - yA);
   fctx.fillStyle = '#000';
-  fctx.fillRect(w - pw, yA + 1, pw, ph - yA - 1);
-  fctx.fillStyle = 'rgba(43,53,80,0.9)';
-  fctx.fillRect(w - pw, Math.round(yB), pw, 1);
-  const ts = chart.timeScale(), vr = ts.getVisibleRange && ts.getVisibleRange();
-  const inView = (t) => !vr || (t >= vr.from && t <= vr.to);
-  let mD = 0, mL = 0;
-  for (const [t, v] of doiMap) if (inView(t)) mD = Math.max(mD, Math.abs(v));
-  for (const [t, v] of liqHist) if (inView(t)) mL = Math.max(mL, v[0], v[1]);
+  fctx.fillRect(xMax, yA, pw, ph - yA);
+  fctx.fillStyle = 'rgba(43,53,80,0.95)';
+  fctx.fillRect(0, Math.round(yA), w, 1);
+  fctx.fillRect(0, Math.round(yB), w, 1);
+  const bs = chart.timeScale().options().barSpacing;
+  const doiB = paneBuckets([...doiMap].map(([t, v]) => [t, Math.max(0, v), Math.max(0, -v)]), bs, xMax);
+  const liqB = paneBuckets([...liqHist].map(([t, v]) => [t, v[1], v[0]]), bs, xMax);   // arriba cortos, abajo largos
+  const mD = drawPaneBars(doiB, yA, yB, 'rgba(38,166,154,0.9)', 'rgba(239,83,80,0.9)', xMax, 1);
+  const mL = drawPaneBars(liqB, yB, ph, 'rgba(46,196,255,0.95)', 'rgba(255,159,28,0.95)', xMax, 5);
+  fctx.font = '11px system-ui, sans-serif';
   fctx.fillStyle = '#8b95ab';
+  const room = xMax - 14;   // el título no pisa el «máx» del eje
+  const fit = (opts) => opts.find(t => fctx.measureText(t).width <= room) || opts[opts.length - 1];
+  fctx.fillText(fit(data.model === 'vol'
+    ? ['Δ Open Interest (no disponible con el modelo Volumen)', 'ΔOI no disponible con el modelo Volumen', 'ΔOI: n/d (Volumen)']
+    : ['Δ Open Interest · escala log · ▲ entran posiciones  ▼ salen', 'Δ Open Interest · log · ▲ entran  ▼ salen', 'ΔOI · log · ▲ entran ▼ salen', 'ΔOI']), 8, yA + 13);
+  fctx.fillText(fit(['Liquidaciones reales (5 exchanges) · escala log · ▲ cortos  ▼ largos', 'Liquidaciones reales · log · ▲ cortos  ▼ largos',
+    'Liq. reales · log · ▲ cortos ▼ largos', 'Liq. reales']), 8, yB + 13);
   fctx.font = '10px system-ui, sans-serif';
-  if (mD > 0) fctx.fillText('±' + fmtM(mD), w - pw + 4, yA + 13);
-  if (mL > 0) fctx.fillText(fmtM(mL), w - pw + 4, yB + 13);
+  if (mD > 0) fctx.fillText('máx ' + fmtM(mD), xMax + 4, yA + 13);
+  if (mL > 0) fctx.fillText('máx ' + fmtM(mL), xMax + 4, yB + 13);
 }
 
 function render() {
@@ -519,7 +555,7 @@ function render() {
   drawLiqs(w, yMax);
   drawBook(w, yMax);
   fctx.restore();
-  drawPaneFrames(w);
+  drawPanes(w);
 }
 
 function fmt(x) { return Math.round(x).toLocaleString('es-ES'); }
@@ -724,25 +760,17 @@ function scheduleReconnect() {
 const EX_NAME = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', deribit: 'Deribit', bitmex: 'BitMEX', hyperliquid: 'Hyperliquid', bitget: 'Bitget' };
 const TOAST_MIN = 250000, PULSE_MIN = 50000;
 
-function setLiqHistSeries() {
-  const keys = [...liqHist.keys()].sort((a, b) => a - b);
-  liqLSeries.setData(keys.map(t => ({ time: t, value: -liqHist.get(t)[0] })));
-  liqSSeries.setData(keys.map(t => ({ time: t, value: liqHist.get(t)[1] })));
-}
-
 function applyLiveLiq(ev, fresh) {
   const [rowid, ts, ex, side, px, usd] = ev;
   if (!data || !data.liqs || rowid <= (data.liqs.rowid || 0)) return;   // ya venía en los datos del servidor
   const step = TFS[tf];
   const tc = Math.floor(ts / 1000 / step) * step;
   if (tc < data.candles[0].time) return;
-  const lastT = liqHist.size ? Math.max(...liqHist.keys()) : 0;
   const hv = liqHist.get(tc) || [0, 0];
   hv[side === 1 ? 0 : 1] += usd;
   liqHist.set(tc, hv);
-  if (tc >= lastT) { liqLSeries.update({ time: tc, value: -hv[0] }); liqSSeries.update({ time: tc, value: hv[1] }); }
-  else setLiqHistSeries();
-  if (usd >= 5000) { data.liqs.items.push([tc, px, side, usd]); version++; }
+  if (usd >= 5000) data.liqs.items.push([tc, px, side, usd]);
+  version++;
   if (fresh) { pulseAt(tc, px, side, usd); queueToast(ex, side, px, usd); }
 }
 
@@ -802,9 +830,7 @@ async function load() {
     updateZoneRange();
     series.setData(d.candles);
     doiMap = new Map((d.doi || []).map(([t, v]) => [t, v]));
-    doiSeries.setData((d.doi || []).map(([t, v]) => ({ time: t, value: v, color: v >= 0 ? 'rgba(38,166,154,0.85)' : 'rgba(239,83,80,0.85)' })));
     liqHist = new Map(((d.liqs && d.liqs.hist) || []).map(([t, L, S]) => [t, [L, S]]));
-    setLiqHistSeries();
     for (const ev of liveBuf) applyLiveLiq(ev, false);   // lo llegado en directo después de los datos del servidor
     // línea de precio inmediata con el último precio conocido
     const lc = d.candles[d.candles.length - 1];
@@ -1036,7 +1062,12 @@ function syncPools() {
   document.getElementById('pInt').value = cfg.intensity || 1;
   const pg = document.getElementById('pGroup');
   pg.value = cfg.group || '';
-  pg.placeholder = 'auto ' + ((lastKnownPrice || 85000) / 10000).toFixed(1);
+  const autoG = (lastKnownPrice || 85000) / 10000;
+  pg.placeholder = 'auto ' + autoG.toFixed(1);
+  const low = cfg.group && cfg.group < autoG / 2;
+  pg.classList.toggle('low', !!low);
+  pg.title = low ? `Grupo muy bajo: líneas finísimas. Recomendado ≈ ${autoG.toFixed(1)} (precio / 10.000) o vacío (automático).`
+    : 'Grosor de cada tramo ≈ grupo × 5 puntos. Vacío = automático (precio / 10.000).';
 }
 document.querySelectorAll('input[data-pool]').forEach(cb => {
   cb.onchange = () => {
@@ -1052,7 +1083,7 @@ document.getElementById('bAuto').onclick = () => { cfg.model = 'auto'; saveCfg()
 document.getElementById('pInt').oninput = (e) => { cfg.intensity = +e.target.value; saveCfg(); version++; updateHeader(); };
 document.getElementById('pGroup').onchange = (e) => {
   const v = parseFloat(String(e.target.value).replace(',', '.'));
-  cfg.group = v > 0 ? v : null; saveCfg(); data = null; lastSig = ''; load();
+  cfg.group = v > 0 ? v : null; saveCfg(); syncPools(); data = null; lastSig = ''; load();
 };
 
 window.addEventListener('resize', layout);

@@ -7,15 +7,17 @@ y comprobado contra liquidaciones **reales** de 5 exchanges. No es una señal de
 - **Heatmap** (vista Pro por defecto): solo se pinta lo que supera «Total ≥» (24 % de «maxHeat»), en 4 colores
   (turquesa, verde, amarillo, rojo). La vista «Completa» muestra todos los niveles con degradado.
 - **Perfil** a la derecha, apilado por apalancamiento, con curvas acumuladas (roja: cortos arriba, verde: largos abajo).
-- **Paneles inferiores**: Δ Open Interest por vela (verde: entran posiciones, rojo: salen) y liquidaciones reales
-  por vela de los 5 exchanges (▲ cortos, ▼ largos).
+- **Paneles inferiores** (escala logarítmica: una cascada enorme no aplasta al resto): Δ Open Interest por vela
+  (verde: entran posiciones, rojo: salen) y liquidaciones reales por vela de los 5 exchanges (▲ cortos, ▼ largos).
+  A la derecha, el máximo visible de cada panel.
 - **Sesgo**: reparto de la liquidez estimada cerca del precio (±2 % en 5m … ±20 % en 1D) y el «imán»:
   la zona más fuerte dentro de ese margen.
 - **En directo**: precio y vela de Binance por WebSocket; liquidaciones reales de los 5 exchanges cada 4 s,
   con pulso en el gráfico (≥ 50K $) y aviso ⚡ cuando suman ≥ 250K $ en 2,5 s.
 - **Encuadre automático**: el eje de precios incluye las zonas fuertes cercanas aunque las velas no lleguen.
 - **Barra de Pools**: valor de cada apalancamiento en el precio del cursor, «Si llega aquí» (acumulado),
-  ΔOI y liquidaciones de la vela del cursor, Grupo (grosor del tramo) e intensidad.
+  ΔOI y liquidaciones de la vela del cursor, Grupo (grosor del tramo; en amarillo si es tan bajo que las líneas
+  salen finísimas, lo normal es dejarlo vacío = automático) e intensidad.
 - **⚙ Capas**: Perfil, Paneles, Calor/Lado, Zonas (rótulos en el eje), Asia (rango y barridos), Liq (burbujas), Libro (muros del libro).
 - **✓ Validez**: acierto del heatmap frente al azar, calibración, fuentes, funding y ratio largos/cortos.
 
