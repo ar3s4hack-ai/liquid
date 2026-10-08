@@ -17,6 +17,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 #pools .pv{color:#9aa4b8;min-width:38px}
 #pools .tot{font-weight:600}
 #pools .cum{color:#9aa4b8}
+#pools .bk{color:#9fd8ff}
 #pools input[type=range]{width:90px;accent-color:#f0e60a}
 #pools .grad{width:44px;height:8px;border-radius:3px;background:linear-gradient(90deg,#008f8f,#0fbf0f,#f0e60a,#e8100a)}
 #pools button{padding:2px 8px;font-size:12px}
@@ -79,6 +80,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
     <span class="tot">Total: <span id="pTot">–</span></span>
     <span class="cum" id="pCum"></span>
     <span class="cum" id="pAt"></span>
+    <span class="cum bk" id="pBook"></span>
     <label title="Grosor de cada tramo: ≈ grupo × 5 puntos. Automático = precio / 10.000">Grupo <input type="number" id="pGroup" min="1" max="40" step="0.5" style="width:62px"></label>
     <button id="bAuto" class="tg">Auto</button>
     <span class="grad"></span><input type="range" id="pInt" min="0.3" max="3" step="0.1" title="Intensidad del color">
@@ -89,6 +91,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
   <div id="val"></div>
   <div id="info"><div id="hdr"></div><div id="bias"></div><div id="zones"></div></div><div id="toasts"></div>
   <div id="cfg">
+    <div class="row"><div class="lbl">Mapa</div><div id="cMap"></div></div>
     <div class="row"><div class="lbl">Vista</div><div id="cView"></div></div>
     <div class="row"><div class="lbl">Capas</div>
       <button id="bProf" class="tg on">Perfil</button><button id="bPanes" class="tg">Paneles</button><button id="bMode" class="tg">Calor</button><button id="bZones" class="tg">Zonas</button>
@@ -117,7 +120,7 @@ const CFG_VER = 9;
 // paneles de abajo por defecto: en el móvil dos (liquidaciones y CVD), en pantallas anchas los tres
 function defaultPanes() { return (window.innerWidth || 1000) < 600 ? ['liq', 'cvd'] : ['doi', 'liq', 'cvd']; }
 let cfg = { ver: CFG_VER, model: 'auto', levs: [25, 50, 100], minPct: 24, view: 'pro', book: false, intensity: 1, group: null, ex: [], panes: true,
-  paneList: defaultPanes(), hl: true, hlLevs: [3, 5, 10, 25, 50, 100] };
+  paneList: defaultPanes(), hl: true, hlLevs: [3, 5, 10, 25, 50, 100], map: 'liq' };
 try {
   const saved = JSON.parse(localStorage.getItem('liq_cfg') || '{}');
   // la v7 y la v8 se conservan; la paleta fría y la vista «Limpia» ya no existen
@@ -129,6 +132,7 @@ try {
     if (cfg.panes === undefined) cfg.panes = true;
     if (!Array.isArray(cfg.paneList)) cfg.paneList = defaultPanes();     // de la v8: se añade el CVD
     if (cfg.hl === undefined) cfg.hl = true;
+    if (!['liq', 'book', 'both'].includes(cfg.map)) cfg.map = 'liq';
     if (!Array.isArray(cfg.hlLevs) || !cfg.hlLevs.length) cfg.hlLevs = [3, 5, 10, 25, 50, 100];
     cfg.ver = CFG_VER;
   }
@@ -164,6 +168,7 @@ let livePrice = null, previousLivePrice = null, ws = null, wsRetry = null, price
 let wsLive = false, liveBar = null, showLiq = false, valTimer = null, zoneLines = [], tindex = {};
 let liveCursor = 0, liveBuf = [], liqHist = new Map(), doiMap = new Map(), zoneRange = null, toastBuf = {}, lastZoneLines = 0;
 let cvdD = new Map(), cvdCum = [[], []];   // CVD: delta por vela [futuros, spot] y acumulado por índice de vela
+let fundAt = [], fuelArr = [];            // funding y «gasolina» por índice de vela
 const bHl = document.getElementById('bHl');
 
 // Hora local del dispositivo (la misma que muestra la app de Binance); los datos siguen en UTC.
@@ -199,8 +204,8 @@ const series = chart.addCandlestickSeries({
 });
 
 // Paneles inferiores (dibujados en el lienzo superior), hasta 3 a elegir en ⚙: ΔOI, liquidaciones reales y CVD
-const PANE_IDS = ['doi', 'liq', 'cvd'];
-const PANE_NAME = { doi: 'ΔOI', liq: 'Liquidaciones', cvd: 'CVD' };
+const PANE_IDS = ['doi', 'liq', 'cvd', 'fund', 'fuel'];
+const PANE_NAME = { doi: 'ΔOI', liq: 'Liquidaciones', cvd: 'CVD', fund: 'Funding', fuel: 'Gasolina' };
 const PANE_SPACE = [0, 0.22, 0.36, 0.48];       // parte del alto para 0, 1, 2 o 3 paneles
 function paneList() { return cfg.panes ? PANE_IDS.filter(x => cfg.paneList.includes(x)) : []; }
 function panesBottom() { return PANE_SPACE[paneList().length]; }
@@ -266,7 +271,7 @@ function signature() {
   return [wrap.clientWidth, wrap.clientHeight,
     series.priceToCoordinate(data.price), series.priceToCoordinate(data.price * 1.01),
     ts.timeToCoordinate(cs[0].time), ts.timeToCoordinate(cs[cs.length - 1].time),
-    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.minPct, cfg.view, cfg.book, cfg.intensity, cfg.panes, cfg.hl,
+    ts.options().barSpacing, sideMode, showProf, showLiq, cfg.minPct, cfg.view, cfg.book, cfg.intensity, cfg.panes, cfg.hl, cfg.map,
     paneList().join(','),
     Math.round((livePrice ?? data.price) / (data.heat.size || 1)), version].join('|');
 }
@@ -478,22 +483,24 @@ function drawLiqs(w, h) {
   }
 }
 
-function paneBuckets(entries, bs, xMax) {
+function paneBuckets(entries, bs, xMax, avg) {
   // velas de ≥ 3 px: una barra por vela, centrada en ella; más finas: se suman por columnas de 3 px para que se vean
+  // (avg: la media de la columna, para tasas como el funding, que no se suman)
   const ts = chart.timeScale(), out = new Map(), col = bs >= 3 ? 0 : 3;
   const wid = col ? col - 0.6 : Math.max(1.5, bs * 0.7);
   for (const [t, up, dn] of entries) {
     const x = ts.timeToCoordinate(t);
     if (x === null || x < 0 || x > xMax) continue;
-    const left = col ? Math.floor(x / col) * col : x - wid / 2, b = out.get(left) || [0, 0, wid];
-    b[0] += up; b[1] += dn;
+    const left = col ? Math.floor(x / col) * col : x - wid / 2, b = out.get(left) || [0, 0, wid, 0];
+    b[0] += up; b[1] += dn; b[3]++;
     out.set(left, b);
   }
+  if (avg) for (const b of out.values()) { b[0] /= b[3]; b[1] /= b[3]; }
   return out;
 }
 
-function drawPaneBars(buckets, y0, y1, upCol, dnCol, xMax, boost) {
-  // escala logarítmica centrada en cero: una cascada enorme ya no aplasta al resto
+function drawPaneBars(buckets, y0, y1, upCol, dnCol, xMax, boost, linear) {
+  // escala logarítmica centrada en cero: una cascada enorme ya no aplasta al resto (linear: escala normal)
   const top = y0 + 18, bot = y1 - 3, zero = Math.round((top + bot) / 2), half = (bot - top) / 2;
   fctx.fillStyle = 'rgba(43,53,80,0.8)';
   fctx.fillRect(0, zero, xMax, 1);
@@ -501,8 +508,8 @@ function drawPaneBars(buckets, y0, y1, upCol, dnCol, xMax, boost) {
   for (const [u, d] of buckets.values()) { if (u > 0) vals.push(u); if (d > 0) vals.push(d); }
   if (!vals.length) return 0;
   vals.sort((p, q) => p - q);
-  const unit = Math.max(1, vals[Math.floor(vals.length / 2)] / boost);   // boost alto = lo pequeño se ve más
-  const f = (v) => Math.log10(1 + v / unit), m = f(vals[vals.length - 1]);
+  const unit = Math.max(1e-12, vals[Math.floor(vals.length / 2)] / boost);   // boost alto = lo pequeño se ve más
+  const f = linear ? (v) => v : (v) => Math.log10(1 + v / unit), m = f(vals[vals.length - 1]);
   for (const [left, [u, d, wid]] of buckets) {
     const x = Math.max(0, left), bwid = Math.min(left + wid, xMax) - x;   // sin pisar el eje de precios
     if (bwid <= 0) continue;
@@ -513,6 +520,16 @@ function drawPaneBars(buckets, y0, y1, upCol, dnCol, xMax, boost) {
 }
 
 // CVD: compras − ventas a mercado acumuladas desde la primera vela cargada (futuros de Binance y spot)
+function preparePanes(d) {
+  // funding: el que se va acumulando en cada vela (el próximo cobro); en el periodo abierto, el previsto
+  const cs = d.candles, fr = (d.funding || []).slice().sort((a, b) => a[0] - b[0]);
+  const pred = d.ctx && d.ctx.funding !== undefined ? d.ctx.funding : null;
+  let j = 0;
+  fundAt = cs.map(c => { while (j < fr.length && fr[j][0] <= c.time) j++; return j < fr.length ? fr[j][1] : pred; });
+  const fm = new Map((d.fuel || []).map(r => [r[0], [r[1], r[2]]]));
+  fuelArr = cs.map(c => fm.get(c.time) || null);
+  prepareCvd();
+}
 function prepareCvd() {
   const cum = [[], []], acc = [0, 0], seen = [false, false];
   for (const c of data.candles) {
@@ -583,6 +600,39 @@ const PANE_DRAW = {
     const f = dd[0] === null ? '–' : sgnM(dd[0]), sp = dd[1] === null ? '–' : sgnM(dd[1]);
     return { titles: [`CVD (compras − ventas a mercado) · blanco: futuros ${f} · violeta: spot ${sp}`, `CVD · blanco futuros ${f} · violeta spot ${sp}`,
       `CVD · fut. ${f} · spot ${sp}`, `CVD fut. ${f}`, 'CVD'], right: '' };
+  },
+  fund(y0, y1, xMax, bs) {
+    // funding de Binance: barras normales (▲ pagan los largos, naranja; ▼ pagan los cortos, cian)
+    const entries = data.candles.map((c, i) => [c.time, Math.max(0, fundAt[i] || 0), Math.max(0, -(fundAt[i] || 0))]);
+    const m = drawPaneBars(paneBuckets(entries, bs, xMax, true), y0, y1, 'rgba(255,159,28,0.85)', 'rgba(46,196,255,0.85)', xMax, 1, true);
+    const now = data.ctx && data.ctx.funding;
+    const nowTxt = now !== undefined && now !== null ? ` · ahora ${(now * 100).toFixed(4)} %` : '';
+    return { titles: [`Funding de Binance · ▲ pagan los largos  ▼ pagan los cortos${nowTxt}`, `Funding · ▲ pagan largos ▼ pagan cortos${nowTxt}`,
+      `Funding${nowTxt}`, 'Funding'], right: m > 0 ? 'máx ' + (m * 100).toFixed(3) + '%' : '' };
+  },
+  fuel(y0, y1, xMax) {
+    // gasolina: liquidaciones estimadas que siguen pendientes al cierre de cada vela (▲ cortos, ▼ largos)
+    const vis = visibleIdx(xMax);
+    const top = y0 + 18, bot = y1 - 3, zero = Math.round((top + bot) / 2), half = (bot - top) / 2;
+    fctx.fillStyle = 'rgba(43,53,80,0.8)'; fctx.fillRect(0, zero, xMax, 1);
+    let mx = 0;
+    for (const [i] of vis) { const f = fuelArr[i]; if (f) mx = Math.max(mx, f[0], f[1]); }
+    if (mx > 0 && vis.length > 1) {
+      for (const [k, col, sgn] of [[1, 'rgba(46,196,255,0.55)', -1], [0, 'rgba(255,159,28,0.55)', 1]]) {
+        fctx.beginPath(); fctx.moveTo(vis[0][1], zero);
+        for (const [i, x] of vis) { const f = fuelArr[i]; fctx.lineTo(x, zero + sgn * (f ? f[k] / mx * half : 0)); }
+        fctx.lineTo(vis[vis.length - 1][1], zero); fctx.closePath(); fctx.fillStyle = col; fctx.fill();
+      }
+    }
+    const last = fuelArr[fuelArr.length - 1];
+    const nowTxt = last && last[0] + last[1] > 0 ? ` · ahora ▲ ${fmtM(last[1])} ▼ ${fmtM(last[0])} (${Math.round(100 * last[0] / (last[0] + last[1]))} % largos)` : '';
+    // con el modelo real son las posiciones de Hyperliquid que siguen abiertas (desde que se graban)
+    const titles = data.model === 'hl'
+      ? [`Gasolina real de Hyperliquid (posiciones por liquidar) · ▲ cortos  ▼ largos${nowTxt}`, `Gasolina HL real · ▲ cortos ▼ largos${nowTxt}`,
+        `Gasolina HL${nowTxt}`, 'Gasolina HL']
+      : [`Gasolina: liquidaciones estimadas pendientes · ▲ cortos  ▼ largos${nowTxt}`, `Gasolina · ▲ cortos ▼ largos${nowTxt}`,
+        `Gasolina${nowTxt}`, 'Gasolina'];
+    return { titles, right: mx > 0 ? 'máx ' + fmtM(mx) : '' };
   }
 };
 
@@ -609,6 +659,70 @@ function drawPanes(w) {
     fctx.font = '10px system-ui, sans-serif';
     if (r.right) fctx.fillText(r.right, xMax + 4, p.y0 + 13);
   }
+}
+
+// ───── mapa de liquidez (libro de órdenes en el tiempo): una imagen de velas × tramos, se pinta de una vez
+const BOOK_PAL = [null, [26, 35, 96, 0.30], [32, 58, 150, 0.45], [40, 95, 205, 0.60], [56, 140, 240, 0.74],
+  [98, 188, 255, 0.86], [175, 228, 255, 0.94], [255, 255, 255, 1]];
+let bookImg = null;
+function buildBookImg(bm) {
+  bookImg = null;
+  if (!bm || bm.error || !bm.rows || !bm.rows.length || !bm.nk) return;
+  const n = bm.rows.length, nk = bm.nk;
+  const off = document.createElement('canvas');
+  off.width = n; off.height = nk;
+  const g = off.getContext('2d');
+  const img = g.createImageData(n, nk);
+  let lastRow = -1;
+  for (let i = 0; i < n; i++) {
+    const r = bm.rows[i];
+    if (!r) continue;
+    lastRow = i;
+    const [a, str] = r;
+    for (let j = 0; j < str.length; j++) {
+      const lv = str.charCodeAt(j) - 48;
+      if (lv <= 0) continue;
+      const c = BOOK_PAL[lv], o = ((nk - 1 - (a + j)) * n + i) * 4;
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = Math.round(c[3] * 255);
+    }
+  }
+  g.putImageData(img, 0, 0);
+  bookImg = { off, n, nk, k0: bm.k0, S: bm.S, levels: bm.levels, rows: bm.rows, lastRow, since: bm.since };
+}
+function drawBookMap(w, alpha) {
+  if (!bookImg || !data || bookImg.n !== data.candles.length) return;
+  const ts = chart.timeScale(), cs = data.candles, n = bookImg.n;
+  const xa = ts.timeToCoordinate(cs[0].time), xb = ts.timeToCoordinate(cs[n - 1].time);
+  const yTop = series.priceToCoordinate((bookImg.k0 + bookImg.nk) * bookImg.S), yBot = series.priceToCoordinate(bookImg.k0 * bookImg.S);
+  if (xa === null || xb === null || yTop === null || yBot === null) return;
+  const bs = n > 1 ? (xb - xa) / (n - 1) : ts.options().barSpacing;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(bookImg.off, 0, 0, n, bookImg.nk, xa - bs / 2, yTop, n * bs, yBot - yTop);
+  // el libro de ahora se alarga hacia la zona futura (órdenes que siguen puestas)
+  const ps = chart.priceScale('right'), pw = (ps && ps.width && ps.width()) || 62;
+  const xr = xa + (bookImg.lastRow + 0.5) * bs;
+  if (bookImg.lastRow >= 0 && xr < w - pw) {
+    ctx.globalAlpha = alpha * 0.6;
+    ctx.drawImage(bookImg.off, bookImg.lastRow, 0, 1, bookImg.nk, xr, yTop, w - pw - xr, yBot - yTop);
+  }
+  ctx.restore();
+}
+function bookAt(t, price) {
+  // nivel del mapa de liquidez en esa vela y precio -> [desde, hasta] en USD
+  if (!bookImg || price === null || price === undefined) return null;
+  const i = tindex[t];
+  const row = i === undefined ? null : bookImg.rows[i];
+  if (!row) return null;
+  const k = Math.floor(price / bookImg.S) - bookImg.k0 - row[0];
+  const lv = k >= 0 && k < row[1].length ? row[1].charCodeAt(k) - 48 : 0;
+  if (lv <= 0) return null;
+  return [bookImg.levels[lv - 1], lv < bookImg.levels.length ? bookImg.levels[lv] : null];
+}
+function bookHeader() {
+  if (!bookImg) return data.book_map && data.book_map.error ? 'libro: error' : 'libro: grabando (aún sin datos)';
+  return `libro de órdenes · tramos de ${fmt(bookImg.S)} $ · desde ${fmtLocalFull(bookImg.since)}`;
 }
 
 // Hyperliquid real: las posiciones más grandes y su precio de liquidación exacto, a la derecha de la última vela
@@ -656,9 +770,12 @@ function render() {
   ctx.clearRect(0, 0, w, h);
   const yMax = priceBottom();            // el mapa no invade los paneles inferiores
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, yMax); ctx.clip();
-  drawFutureTint(w, yMax);
-  drawTime(w, yMax);
-  drawProfile(w);
+  if (cfg.map !== 'liq') drawBookMap(w, cfg.map === 'both' ? 0.8 : 1);   // libro de órdenes debajo
+  if (cfg.map !== 'book') {
+    drawFutureTint(w, yMax);
+    drawTime(w, yMax);
+    drawProfile(w);
+  }
   ctx.restore();
   if (fx.width !== cv.width || fx.height !== cv.height) { fx.width = cv.width; fx.height = cv.height; }
   fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -680,18 +797,21 @@ function fmtM(x) {
 
 function updateHeader() {
   if (!data) { hdr.textContent = ''; return; }
+  if (cfg.map === 'book') { hdr.textContent = `BINANCE:${data.symbol} · ${tf} · Mapa de liquidez · ${bookHeader()}`; return; }
   const min = (cfg.minPct / 100) * data.heat.max;
   if (cfg.view === 'pro') {
     const mxp = proMax();
     const exTxt = data.ex && data.ex.length ? data.ex.map(x => x.toUpperCase()).join('+') : 'todos';
     const what = data.model === 'hl' ? `Hyperliquid real (${(data.hl && data.hl.positions) || 0} posiciones)` : `OI: ${exTxt}`;
-    hdr.textContent = `BINANCE:${data.symbol} · ${tf} · Pools ${data.levs.map(l => l + 'X').join('+')} · Total ≥ ${fmtM((cfg.minPct / 100) * mxp)} · maxHeat ${fmtM(mxp)} · ${what}`;
+    hdr.textContent = `BINANCE:${data.symbol} · ${tf} · Pools ${data.levs.map(l => l + 'X').join('+')} · Total ≥ ${fmtM((cfg.minPct / 100) * mxp)} · maxHeat ${fmtM(mxp)} · ${what}` +
+      (cfg.map === 'both' ? ' · + ' + bookHeader() : '');
     return;
   }
   const mname = data.model === 'auto' ? (data.calib && data.calib.params ? 'Auto (calibrado)' : 'Auto (sin calibrar aún)') : (MODEL_NAME[data.model] || data.model);
   const parts = ['BINANCE:' + data.symbol + '.P (perpetuo)', tf + ' · hora local', mname];
   parts.push('Pools ' + data.levs.map(l => l + 'X').join('+'));
   parts.push('Total ≥ ' + fmtM(min), 'maxHeat ' + fmtM(data.heat.max));
+  if (cfg.map === 'both') parts.push('+ ' + bookHeader());
   hdr.textContent = parts.join(' · ');
 }
 
@@ -736,7 +856,8 @@ function updateZoneLines() {
 const BIAS_WIN = { '5m': 2, '15m': 3, '1h': 5, '4h': 10, '1d': 20 };
 const FIT_WIN = { '5m': 4, '15m': 6, '1h': 10, '4h': 20, '1d': 30 };
 function updateBias() {
-  if (!data || !data.heat || !data.heat.active) { biasEl.innerHTML = ''; return; }
+  // es del mapa de liquidaciones: con solo el libro de órdenes no se enseña
+  if (!data || !data.heat || !data.heat.active || cfg.map === 'book') { biasEl.innerHTML = ''; return; }
   const px = livePrice ?? data.price, w = BIAS_WIN[tf] / 100;
   let up = 0, dn = 0;
   for (const [p, L, S] of data.heat.active) {
@@ -759,7 +880,7 @@ function updateBias() {
 function updateZoneRange() {
   // zonas fuertes cercanas que el encuadre automático debe enseñar aunque las velas no lleguen
   zoneRange = null;
-  if (!data || !data.zones) return;
+  if (!data || !data.zones || cfg.map === 'book') return;
   const px = data.price, w = FIT_WIN[tf] / 100, half = (data.heat && data.heat.size) || 0;
   const ps = data.zones.filter(z => z.ratio >= 0.3 && Math.abs(z.price - px) / px <= w).map(z => z.price);
   if (ps.length) zoneRange = [Math.min(...ps) - half, Math.max(...ps) + half];
@@ -941,7 +1062,7 @@ function flushToast(side) {
 async function load() {
   try {
     const q = `tf=${tf}&model=${cfg.model}&lev=${curLevs().join(',')}` + (cfg.view === 'pro' ? '&bin=' + binParam() : '') +
-      (cfg.ex.length ? '&ex=' + cfg.ex.join(',') : '') + (K ? '&k=' + encodeURIComponent(K) : '');
+      (cfg.ex.length ? '&ex=' + cfg.ex.join(',') : '') + (cfg.map !== 'liq' ? '&book=1' : '') + (K ? '&k=' + encodeURIComponent(K) : '');
     const r = await fetch('/api/data?' + q, { cache: 'no-store' });
     const d = await r.json();
     if (d.error) throw new Error(d.error);
@@ -953,7 +1074,8 @@ async function load() {
     for (const ev of liveBuf) applyLiveLiq(ev, false);   // lo llegado en directo después de los datos del servidor
     tindex = {}; d.candles.forEach((c, i) => { tindex[c.time] = i; });
     cvdD = new Map((d.cvd || []).map(([t, f, sp]) => [t, [f, sp]]));
-    prepareCvd();
+    preparePanes(d);
+    buildBookImg(d.book_map);
     // línea de precio inmediata con el último precio conocido
     const lc = d.candles[d.candles.length - 1];
     if (!liveBar || liveBar.time < lc.time) liveBar = { ...lc };
@@ -989,6 +1111,12 @@ function chip(label, on, fn) {
   return b;
 }
 function buildCfg() {
+  const cmap = document.getElementById('cMap'); cmap.innerHTML = '';
+  [['liq', 'Liquidaciones'], ['book', 'Liquidez (libro)'], ['both', 'Las dos']].forEach(([v, t]) => cmap.appendChild(chip(t, cfg.map === v, () => {
+    const need = v !== 'liq' && !bookImg && !(data && data.book_map);
+    cfg.map = v; saveCfg(); version++; updateHeader(); updateBias(); updateZoneRange(); buildCfg();
+    if (need) load();
+  })));
   const cv2 = document.getElementById('cView'); cv2.innerHTML = '';
   [['pro', 'Pro'], ['full', 'Completa']].forEach(([v, t]) => cv2.appendChild(chip(t, cfg.view === v, () => {
     const reload = (cfg.view === 'pro') !== (v === 'pro');
@@ -1020,7 +1148,9 @@ function buildCfg() {
   })));
   const cp = document.getElementById('cPanes'); cp.innerHTML = '';
   PANE_IDS.forEach(id => cp.appendChild(chip(PANE_NAME[id], cfg.paneList.includes(id), () => {
-    cfg.paneList = cfg.paneList.includes(id) ? cfg.paneList.filter(x => x !== id) : cfg.paneList.concat(id);
+    let next = cfg.paneList.includes(id) ? cfg.paneList.filter(x => x !== id) : cfg.paneList.concat(id);
+    if (next.length > 3) next = next.slice(-3);        // como mucho 3: se quita el más antiguo
+    cfg.paneList = next;
     if (cfg.paneList.length) cfg.panes = true;
     saveCfg(); applyPanes(); version++; buildCfg();
   })));
@@ -1055,6 +1185,13 @@ function cgBlock(g) {
   return `<h4>CoinGlass</h4>${head}
     <div>${(g.checks || []).map(c => `${c.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'} ${esc(c.name)}`).join(' · ')}</div>
     ${when ? `<div class="muted">Comprobado a las ${when} · se repite cada 6 h.</div>` : ''}`;
+}
+function bookBlock(b) {
+  if (!b || b.error) return b && b.error ? `<h4>Mapa de liquidez</h4><div class="bad">Error: ${esc(b.error)}</div>` : '';
+  const since = b.since && b.since.book5 ? fmtLocalFull(b.since.book5) : null;
+  return `<h4>Mapa de liquidez (libro de Binance)</h4>
+    <div>${b.synced ? '<span class="ok">●</span> sincronizado' : '<span class="bad">●</span> sin sincronizar'} · ${fmt(b.levels || 0)} niveles${b.bid_low ? ` (${fmt(b.bid_low)} – ${fmt(b.ask_high)})` : ''}</div>
+    <div class="muted">${since ? 'Grabando desde ' + since : 'Aún sin bloques guardados'} · ${(b.rows && b.rows.book5) || 0} bloques de 5 min. Son órdenes límite reales, no liquidaciones. Los niveles lejanos aparecen cuando alguien pone o quita órdenes ahí: el libro se completa con las horas.</div>`;
 }
 function hlBlock(v) {
   const h = v.hl, c = v.hl_compare;
@@ -1109,7 +1246,7 @@ function renderVal(v) {
     const p = cb.params;
     parts.push(`<h4>Calibración automática</h4>
       <div>Mejor de ${cb.tested} combinaciones probadas con ${cb.events} liquidaciones reales (${String(cb.hours).replace('.', ',')} h):</div>
-      <div><b>${p.tiers.join('x · ')}x</b> · vida media <b>${p.half_life_h ? p.half_life_h + ' h' : 'sin'}</b> · filtro de picos <b>${p.spike_z ? 'sí' : 'no'}</b></div>
+      <div><b>${p.tiers.join('x · ')}x</b> · vida media <b>${p.half_life_h ? p.half_life_h + ' h' : 'sin'}</b> · filtro de picos <b>${p.spike_z ? 'sí' : 'no'}</b> · margen de mantenimiento <b>${String(((p.mmr || 0.005) * 100).toFixed(1)).replace('.', ',')} %</b></div>
       <div>Puntuación ${times(cb.score)} <span class="muted">(la configuración por defecto: ${times(cb.default_score)})</span></div>
       <div class="muted">Se repite cada 3 h. Con pocas liquidaciones el resultado puede cambiar.</div>`);
   } else if (cb) {
@@ -1135,7 +1272,7 @@ function renderVal(v) {
   parts.push(`<h4>Recogida de liquidaciones reales (${LIQ_EX.length} exchanges)</h4>
     <div>${LIQ_EX.map(ex => `${dot(col[ex])} ${EX_NAME[ex]}`).join(' · ')}</div>
     <div class="muted">Guardadas: ${(v.db && v.db.events) || 0} · escuchando ${String((v.db && v.db.hours_listening) || 0).replace('.', ',')} h en total</div>
-    ${hlBlock(v)}${czBlock(v.coinalyze)}${cgBlock(v.coinglass)}
+    ${hlBlock(v)}${bookBlock(v.book)}${czBlock(v.coinalyze)}${cgBlock(v.coinglass)}
     <h4>Cómo leerlo</h4>
     <div class="muted">Acierto: % del dinero liquidado que cayó en una zona que el heatmap ya marcaba antes. Azar: lo que se acertaría con un precio cualquiera cercano. Burbuja <span class="L">naranja</span> = largos liquidados, <span class="S">cian</span> = cortos. Binance solo envía una muestra (1 por segundo).</div>`);
   valEl.innerHTML = parts.join('');
@@ -1225,12 +1362,22 @@ function paneReadout(t) {
   if (hv && (hv[0] || hv[1])) parts.push(`liquidado: largos ${fmtM(hv[0])} · cortos ${fmtM(hv[1])}`);
   if (cd && paneList().includes('cvd') && (cd[0] !== null || cd[1] !== null))
     parts.push(`delta: fut. ${cd[0] === null ? '–' : sgnM(cd[0])} · spot ${cd[1] === null ? '–' : sgnM(cd[1])}`);
+  const i = tindex[t], on = paneList();
+  if (i !== undefined && on.includes('fund') && fundAt[i] !== null && fundAt[i] !== undefined) parts.push(`funding ${(fundAt[i] * 100).toFixed(4)} %`);
+  if (i !== undefined && on.includes('fuel') && fuelArr[i]) parts.push(`gasolina ▲ ${fmtM(fuelArr[i][1])} ▼ ${fmtM(fuelArr[i][0])}`);
   el.textContent = parts.join(' · ');
 }
+function bookReadout(t, price) {
+  const el = document.getElementById('pBook');
+  const r = cfg.map !== 'liq' && t ? bookAt(t, price) : null;
+  el.textContent = r ? `Libro ≈ ${fmtM(r[0])}${r[1] ? '–' + fmtM(r[1]) : '+'}` : '';
+}
 chart.subscribeCrosshairMove((param) => {
-  if (!param || !param.point) { poolReadout(null); paneReadout(null); return; }
-  poolReadout(param.point.y <= priceBottom() ? series.coordinateToPrice(param.point.y) : null);
+  if (!param || !param.point) { poolReadout(null); paneReadout(null); bookReadout(null); return; }
+  const price = param.point.y <= priceBottom() ? series.coordinateToPrice(param.point.y) : null;
+  poolReadout(price);
   paneReadout(param.time);
+  bookReadout(param.time, price);
 });
 
 function syncPools() {

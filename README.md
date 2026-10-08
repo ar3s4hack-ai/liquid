@@ -2,7 +2,7 @@
 
 Mapa de liquidaciones **estimado** de BTCUSDT (Binance Futuros, perpetuo) con velas en tiempo real,
 comprobado contra liquidaciones **reales** de 8 exchanges y contra las posiciones **reales** de Hyperliquid.
-No es una señal de entrada.
+También graba el **libro de órdenes** de Binance para el mapa de liquidez. No es una señal de entrada.
 
 ## Qué se ve
 - **Heatmap** (vista Pro por defecto): solo se pinta lo que supera «Total ≥» (24 % de «maxHeat»), en 4 colores
@@ -12,9 +12,18 @@ No es una señal de entrada.
   liquidación exacto. Las más grandes salen como líneas discontinuas a la derecha («HL corto 3.5M · 25x»).
   El modelo «Hyperliquid real» pinta esas posiciones en el tiempo (desde que se empezaron a grabar) con la misma vista Pro.
   Solo es Hyperliquid, no todo el mercado.
-- **Paneles inferiores** (hasta 3, se eligen en ⚙; en el móvil salen 2): Δ Open Interest por vela, liquidaciones reales
-  por vela (escala logarítmica: una cascada enorme no aplasta al resto) y **CVD** (compras − ventas a mercado acumuladas:
-  blanco futuros de Binance, violeta spot; cada línea con su escala). El CVD de futuros se mueve en directo con la vela.
+- **Mapa de liquidez** (⚙ → Mapa: «Liquidaciones», «Liquidez (libro)» o «Las dos»): el libro de órdenes de Binance Futuros
+  grabado en el tiempo, como el «Liquidity Heatmap» de CoinGlass. Cuanto más claro, más dinero esperando en órdenes límite
+  (blanco = los muros más grandes). Son órdenes reales, no liquidaciones. Empieza a grabar al desplegar: al principio solo
+  se ve cerca del precio y se completa con las horas. El cursor dice cuánto hay en ese tramo («Libro ≈ 316K–633K»).
+- **Paneles inferiores** (hasta 3, se eligen en ⚙; al añadir un cuarto sale el más antiguo; en el móvil salen 2):
+  - Δ Open Interest por vela.
+  - Liquidaciones reales por vela (escala logarítmica: una cascada enorme no aplasta al resto).
+  - **CVD** (compras − ventas a mercado acumuladas: blanco futuros de Binance, violeta spot; cada línea con su escala).
+    El de futuros se mueve en directo con la vela.
+  - **Funding** de Binance por periodo (▲ pagan los largos, ▼ pagan los cortos) y el previsto ahora.
+  - **Gasolina**: liquidaciones estimadas que siguen pendientes al cierre de cada vela (▲ cortos, ▼ largos).
+    Con el modelo «Hyperliquid real», las posiciones reales de Hyperliquid por liquidar desde que se graban.
 - **Sesgo**: reparto de la liquidez cerca del precio (±2 % en 5m … ±20 % en 1D) y el «imán»: la zona más fuerte dentro de ese margen.
 - **En directo**: precio y vela de Binance por WebSocket; liquidaciones reales de los 8 exchanges cada 4 s,
   con pulso en el gráfico (≥ 50K $) y aviso ⚡ cuando suman ≥ 250K $ en 2,5 s.
@@ -22,16 +31,18 @@ No es una señal de entrada.
 - **Barra de Pools**: valor de cada apalancamiento en el precio del cursor, «Si llega aquí» (acumulado),
   ΔOI, liquidaciones y delta de la vela del cursor, Grupo (grosor del tramo; en amarillo si es tan bajo que las líneas
   salen finísimas, lo normal es dejarlo vacío = automático) e intensidad. En el modelo real, los pools filtran sus posiciones.
-- **⚙ Capas**: Perfil, Paneles, Calor/Lado, Zonas, Asia, Liq (burbujas), Libro (muros del libro), HL; y qué paneles van abajo.
+- **⚙ Capas**: Perfil, Paneles, Calor/Lado, Zonas, Asia, Liq (burbujas), Libro (muros del libro), HL; qué mapa y qué paneles van abajo.
 - **✓ Validez**: acierto del heatmap frente al azar, calibración, fuentes, **cuánto coincide el mapa estimado con las
-  posiciones reales de Hyperliquid** (frente al azar), funding y ratio largos/cortos.
+  posiciones reales de Hyperliquid** (frente al azar), estado de la grabación del libro, funding y ratio largos/cortos.
 
 ## Cómo se estima
 - OI sube en una vela: entran largos y cortos por la misma cantidad al precio típico (máx + mín + cierre) / 3,
-  repartidos en 3x, 5x, 10x, 25x, 50x y 100x. Cada nivel vive hasta que el precio lo toca
-  (como Hyblock y Trading Different).
-- Autocalibración cada 3 h: prueba 36 combinaciones contra las liquidaciones reales guardadas y el modelo «Auto»
-  usa la mejor solo si supera a la estándar (25X+50X+100X) en ≥ 5 %. Necesita 100 liquidaciones y 24 h escuchando.
+  repartidos en 3x, 5x, 10x, 25x, 50x y 100x. Precio de liquidación = entrada × (1 ∓ 1/apalancamiento ± margen de
+  mantenimiento). Cada nivel vive hasta que el precio lo toca (como Hyblock y Trading Different).
+- Autocalibración cada 3 h: prueba 72 combinaciones (apalancamientos, vida media, filtro de picos, cierres y margen de
+  mantenimiento del 0,5 % o del 0,4 %, el de Binance para posiciones pequeñas de BTC) contra las liquidaciones reales
+  guardadas, y el modelo «Auto» usa la mejor solo si supera a la estándar (25X+50X+100X, 0,5 %) en ≥ 5 %.
+  Necesita 100 liquidaciones y 24 h escuchando.
 
 ## Fuentes
 - Open Interest con histórico: Binance USDT, Binance USDC, Binance COIN-M, Bybit, OKX USDT y OKX USD.
@@ -40,7 +51,11 @@ No es una señal de entrada.
   Bitget, Gate y HTX por su API pública cada 10 s.
 - Posiciones reales de Hyperliquid: direcciones que operan BTC (canal público de operaciones) y las cuentas más grandes
   de la clasificación pública; se consulta cada una sin pasar del 25 % del límite de su API.
-- CVD: velas de Binance Futuros y Spot (compras a mercado frente al volumen total).
+- CVD: velas de Binance Futuros y Spot (compras a mercado frente al volumen total). Funding: histórico de Binance.
+- Libro de órdenes de Binance Futuros: instantánea de 1000 niveles por lado + cambios cada 500 ms por WebSocket (con las
+  reglas de Binance para no perder cambios; si hay un hueco, se vuelve a sincronizar). Cada 30 s se suma el dinero por
+  tramos de 10 $ (±6 % del precio) y se guarda la media de cada 5 min (7 días) y de cada hora (60 días). Las temporalidades
+  de 5m y 15m usan los bloques de 5 min; las de 1h, 4h y 1D, los de 1 h.
 - **Coinalyze** (opcional, clave gratis): OI con histórico de los mercados de BTC con más OI que no tenemos (Gate, Kraken…)
   y liquidaciones por vela de los mercados que no escuchamos; también rellena las velas en las que el servidor no estuvo
   escuchando. Como mucho 34 consultas por minuto (su límite es 40). La web cita la fuente con enlace, como piden.
@@ -67,15 +82,17 @@ No es una señal de entrada.
 | LIQ_MIN_USD · LIQ_RETENTION_DAYS | burbuja mínima en USD y días guardados | 5000 · 30 |
 | CALIB_MIN_EVENTS · CALIB_MIN_HOURS · CALIB_MARGIN | requisitos y margen de la calibración | 100 · 24 · 1.05 |
 | CACHE_TTL · VAL_TTL | caché de datos y de validación, en segundos | 60 · 300 |
+| BOOK · BOOK_BIN_USD · BOOK_RANGE_PCT | grabación del libro (0 = apagada), tramo en USD y rango en % | 1 · 10 · 6 |
 | COLLECT | 0 desactiva la recogida (pruebas) | 1 |
 
 ## Rutas
 | Ruta | Qué devuelve |
 |---|---|
-| `/api/data?tf=5m&model=auto&lev=25,50,100&bin=0.05&ex=binance` | velas, heatmap, zonas, ΔOI, OI total, liquidaciones por vela, CVD, Hyperliquid, contexto |
+| `/api/data?tf=5m&model=auto&lev=25,50,100&bin=0.05&ex=binance` | velas, heatmap, zonas, ΔOI, OI total, liquidaciones por vela, CVD, funding, gasolina, Hyperliquid, contexto |
+| `/api/data?...&book=1` | lo mismo + el mapa de liquidez (`book_map`: por vela, niveles 1–7 del libro en tramos) |
 | `/api/live?after=CURSOR` | liquidaciones reales nuevas (para el directo) |
 | `/api/validate?tf=5m` | acierto del heatmap frente al azar y coincidencia con Hyperliquid |
 | `/api/calibrate` | fuerza una calibración (una cada 10 min) |
-| `/api/status` | estado de los recolectores, la base de datos, Hyperliquid, Coinalyze y la clave de CoinGlass |
+| `/api/status` | estado de los recolectores, la base de datos, el libro de órdenes, Hyperliquid, Coinalyze y la clave de CoinGlass |
 | `/api/test-alert` | mensaje de prueba a Telegram |
 | `/health` | ok |

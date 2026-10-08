@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 from flask import Flask, jsonify, request, send_from_directory
 
+import book as BK
 import cg as CG
 import cz as CZ
 import hl as HL
@@ -63,8 +64,8 @@ if DEFAULT_MODEL not in MODELS:
 # y cierre de posiciones cuando baja el Open Interest.
 # Por defecto, como Hyblock / Trading Different: un nivel vive hasta que el precio lo toca
 # (sin cierres por bajada de OI ni envejecimiento). La autocalibración puede activarlos si los datos lo justifican.
-DEFAULT_PARAMS = {"entry": "typical", "half_life_h": None, "spike_z": 0.0, "close_on_drop": False}
-MMR = 0.005
+DEFAULT_PARAMS = {"entry": "typical", "half_life_h": None, "spike_z": 0.0, "close_on_drop": False, "mmr": 0.005}
+MMR = 0.005   # margen de mantenimiento por defecto; la calibración prueba también 0,4 %
 BIN_PCT = float(os.getenv("BIN_PCT", "0.02"))
 ZONE_GAP_PCT = float(os.getenv("ZONE_GAP_PCT", "0.04"))
 RANGE_PCT = float(os.getenv("RANGE_PCT", "8.0"))
@@ -135,6 +136,21 @@ def fetch_spot_deltas(tf, limit=None):
     out = {int(r[0] // 1000): 2 * float(r[10]) - float(r[7]) for r in rows if len(r) > 10}
     _candle_cache[key] = (time.time(), out)
     return dict(out)
+
+
+_funding_cache = {"t": 0, "start": None, "v": None}
+
+
+def fetch_funding(start_s):
+    """Funding cobrado en Binance desde start_s: [[segundo, tasa]] (cada 8 h, o 4 h en días movidos)."""
+    now = time.time()
+    c = _funding_cache
+    if c["v"] is not None and now - c["t"] < 600 and c["start"] <= start_s:
+        return [x for x in c["v"] if x[0] >= start_s - 86400]
+    rows = get_json(f"{FAPI}/fapi/v1/fundingRate", {"symbol": SYMBOL, "startTime": int((start_s - 86400) * 1000), "limit": 1000})
+    out = sorted([int(r["fundingTime"]) // 1000, float(r["fundingRate"])] for r in rows)
+    c.update(t=now, start=start_s, v=out)
+    return out
 
 
 def fetch_oi_binance(tf, limit=None):
@@ -404,6 +420,7 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
     step = (candles[1]["time"] - candles[0]["time"]) if n > 1 else 300
     decay = 0.5 ** (step / (P["half_life_h"] * 3600)) if P.get("half_life_h") else 1.0
     nt = len(ALL_TIERS)
+    mmr = P.get("mmr") or MMR
     F = {1: 1.0, -1: 1.0}
     M = {1: 0.0, -1: 0.0}
     FL, FS = [], []
@@ -416,6 +433,7 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
     touches = defaultdict(float)
     pos_hist = deque(maxlen=96)
     doi = []
+    fuel = []          # «gasolina»: USD por liquidar (largos, cortos) al cierre de cada vela
 
     def k_of(side):
         return 0 if side == 1 else 1
@@ -487,8 +505,8 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
             if amount > 0:
                 s_buy = buy_share(c)
                 for lev, w in tiers:
-                    add(entry * (1 - 1 / lev + MMR), amount * w * s_buy, 1, lev, touched)
-                    add(entry * (1 + 1 / lev - MMR), amount * w * (1 - s_buy), -1, lev, touched)
+                    add(entry * (1 - 1 / lev + mmr), amount * w * s_buy, 1, lev, touched)
+                    add(entry * (1 + 1 / lev - mmr), amount * w * (1 - s_buy), -1, lev, touched)
         else:
             d = oi_delta(sources, prev, c["time"])
             doi.append(d)
@@ -504,8 +522,8 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
                 pos_hist.append(d)
                 if ok:
                     for lev, w in tiers:
-                        add(entry * (1 - 1 / lev + MMR), d * w, 1, lev, touched)
-                        add(entry * (1 + 1 / lev - MMR), d * w, -1, lev, touched)
+                        add(entry * (1 - 1 / lev + mmr), d * w, 1, lev, touched)
+                        add(entry * (1 + 1 / lev - mmr), d * w, -1, lev, touched)
             elif d is not None and d < 0 and P.get("close_on_drop", False):
                 # cada liquidación ejecutada (tocada) ya bajó el OI: solo el resto son cierres voluntarios
                 d = min(0.0, d + touched_value)
@@ -525,6 +543,7 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
         settle(i, touched)
         FL.append(F[1])
         FS.append(F[-1])
+        fuel.append((max(0.0, M[1] * F[1]), max(0.0, M[-1] * F[-1])))
 
     tidx = {c["time"]: i for i, c in enumerate(candles)}
     active = []
@@ -554,6 +573,7 @@ def estimate_heat(candles, sources, price, tiers, model="oi", out=None, params=N
     if out is not None:
         out["touches"] = dict(touches)
         out["doi"] = doi
+        out["fuel"] = fuel
     return heat, zones
 
 
@@ -626,7 +646,11 @@ _book_cache = {"t": 0, "v": None}
 
 
 def order_book_walls(price):
-    """Muros de liquidez reales del libro de Binance Futuros (no son liquidaciones)."""
+    """Muros de liquidez reales del libro de Binance Futuros (no son liquidaciones).
+    Con el libro local sincronizado se usan todos sus niveles; si no, la instantánea REST de 1000 niveles."""
+    w = BK.BOOK.walls(price)
+    if w:
+        return w
     now = time.time()
     if now - _book_cache["t"] < 30 and _book_cache["v"]:
         return _book_cache["v"]
@@ -668,7 +692,7 @@ def build(tf, model, levs, bin_pct=None, groups=None):
             p = calib["params"]
             tiers = tiers_from(p["tiers"])
             params = {"half_life_h": p.get("half_life_h"), "spike_z": p.get("spike_z", 0.0),
-                      "close_on_drop": p.get("close_on_drop", False)}
+                      "close_on_drop": p.get("close_on_drop", False), "mmr": p.get("mmr") or MMR}
         else:
             tiers = tiers_from([25, 50, 100])   # sin calibrar: los pools estándar 25X+50X+100X
     params["range_pct"] = RANGE_BY_TF.get(tf, RANGE_PCT)
@@ -683,7 +707,7 @@ def build(tf, model, levs, bin_pct=None, groups=None):
     elif model == "hl":
         size = price * (bin_pct or BIN_PCT) / 100
         heat, _touches, hl_since = HL.build_heat(candles, step, size, price, params["range_pct"],
-                                                 tiers=[l for l, _ in tiers])
+                                                 tiers=[l for l, _ in tiers], out=out)
         zones = cluster_zones(heat["active"], price)
         used = ["hyperliquid_real"]
         try:
@@ -704,6 +728,8 @@ def build(tf, model, levs, bin_pct=None, groups=None):
         used = list(sources)
         oi = oi_summary(sources, candles, step)
     doi = [[c["time"], round(d)] for c, d in zip(candles, out.get("doi") or []) if d is not None]
+    # «gasolina»: lo que queda por liquidar al cierre de cada vela (estimado, o real de Hyperliquid desde que se graba)
+    fuel = [[c["time"], round(f[0]), round(f[1])] for c, f in zip(candles, out.get("fuel") or []) if f is not None]
     try:
         c15 = candles if tf == "15m" else fetch_candles("15m", 300)
         asia = asia_info(c15)
@@ -734,6 +760,8 @@ def build(tf, model, levs, bin_pct=None, groups=None):
         "book": safe_book(price),
         "ctx": market_context(),
         "cvd": safe_cvd(tf, candles, notes),
+        "fuel": fuel,
+        "funding": safe_funding(candles, notes),
         "hl": safe_hl(price, params["range_pct"], hl_since),
         "labels": source_labels(),
         "credits": ["coinalyze"] if CZ.KEY and CZ.STATE["data"] else [],
@@ -753,6 +781,14 @@ def safe_cvd(tf, candles, notes):
         sp = spot.get(c["time"])
         out.append([c["time"], round(perp) if perp is not None else None, round(sp) if sp is not None else None])
     return out
+
+
+def safe_funding(candles, notes):
+    try:
+        return fetch_funding(candles[0]["time"])
+    except Exception as e:
+        notes.append(f"funding: {str(e)[:60]}")
+        return []
 
 
 def safe_hl(price, range_pct, since=None):
@@ -856,7 +892,7 @@ def run_validation(tf, levs):
     if calib:
         plan.insert(0, ("auto", tiers_from(calib["params"]["tiers"]),
                         {"half_life_h": calib["params"].get("half_life_h"), "spike_z": calib["params"].get("spike_z", 0.0),
-                         "close_on_drop": calib["params"].get("close_on_drop", False)}))
+                         "close_on_drop": calib["params"].get("close_on_drop", False), "mmr": calib["params"].get("mmr") or MMR}))
     est = None
     for name, tr, params in plan:
         if name != "vol" and not sources:
@@ -921,13 +957,14 @@ def compare_real(heat, real, price, min_ratio=0.1, tol_pct=0.1, win_pct=2.0):
 
 
 CALIB_GRID = [
-    {"tiers": t, "half_life_h": h, "spike_z": z, "close_on_drop": c}
+    {"tiers": t, "half_life_h": h, "spike_z": z, "close_on_drop": c, "mmr": mmr}
     for t in ([25, 50, 100], [10, 25, 50, 100], [5, 10, 25, 50, 100])
     for h in (None, 24.0, 72.0)
     for z in (0.0, 1.0)
     for c in (False, True)
+    for mmr in (0.005, 0.004)
 ]
-CALIB_DEFAULT = {"tiers": [25, 50, 100], "half_life_h": None, "spike_z": 0.0, "close_on_drop": False}
+CALIB_DEFAULT = {"tiers": [25, 50, 100], "half_life_h": None, "spike_z": 0.0, "close_on_drop": False, "mmr": 0.005}
 CALIB_MARGIN = float(os.getenv("CALIB_MARGIN", "1.05"))
 CALIB_MIN_EVENTS = int(os.getenv("CALIB_MIN_EVENTS", "100"))
 CALIB_MIN_HOURS = float(os.getenv("CALIB_MIN_HOURS", "24"))
@@ -955,7 +992,8 @@ def calibrate(tf="5m"):
     for g in CALIB_GRID:
         out = {}
         heat, _ = estimate_heat(candles, sources, price, tiers_from(g["tiers"]), "oi", out=out,
-                                params={"half_life_h": g["half_life_h"], "spike_z": g["spike_z"], "close_on_drop": g["close_on_drop"]})
+                                params={"half_life_h": g["half_life_h"], "spike_z": g["spike_z"], "close_on_drop": g["close_on_drop"],
+                                        "mmr": g["mmr"]})
         r = LQ.validate(candles, step, heat, out["touches"], events, covered)
         results.append((g, r))
     def score(r):
@@ -1160,6 +1198,7 @@ if os.getenv("COLLECT", "1") != "0":
     threading.Thread(target=calib_loop, daemon=True, name="calib").start()
     threading.Thread(target=snapshot_loop, daemon=True, name="oi-snap").start()
     CG.start()   # solo si hay COINGLASS_API_KEY: comprueba qué deja usar el plan
+    BK.start()   # mapa de liquidez: libro de órdenes de Binance en el tiempo
     CZ.start()   # solo si hay COINALYZE_API_KEY
     HL.start(lambda: LQ.MARK["price"], lambda: LAST_OI.get("hyperliquid"))
 
@@ -1189,9 +1228,20 @@ def api_data():
         return jsonify({"error": "bin fuera de rango (0.01 a 0.5)"}), 400
     try:
         groups = [g for g in request.args.get("ex", "").split(",") if g]
-        return jsonify(get_data(tf, model, levs, bin_pct, groups))
+        d = get_data(tf, model, levs, bin_pct, groups)
+        if request.args.get("book") == "1":       # mapa de liquidez (solo si la web lo enseña)
+            d = dict(d, book_map=safe_book_map(d, tf))
+        return jsonify(d)
     except Exception as e:
         return jsonify({"error": str(e)}), 502
+
+
+def safe_book_map(d, tf):
+    try:
+        return BK.book_map(d["candles"], TF_SECONDS[tf], d["heat"]["size"], d["price"],
+                           range_pct=min(RANGE_BY_TF.get(tf, RANGE_PCT), 12.0))
+    except Exception as e:
+        return {"error": str(e)[:120]}
 
 
 def parse_levs():
@@ -1210,7 +1260,8 @@ def api_validate():
     except ValueError:
         return jsonify({"error": "lev no válido"}), 400
     try:
-        return jsonify(dict(get_validation(tf, levs), coinglass=CG.summary(), coinalyze=safe_call(CZ.status)))
+        return jsonify(dict(get_validation(tf, levs), coinglass=CG.summary(), coinalyze=safe_call(CZ.status),
+                            book=safe_call(BK.status)))
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -1238,7 +1289,7 @@ def api_status():
     except Exception as e:
         db = {"error": str(e)[:120]}
     return jsonify({"collectors": LQ.status(), "db": db, "mark": LQ.MARK, "data_dir": LQ.DATA_DIR,
-                    "coinglass": CG.summary(detail=True), "hyperliquid": safe_call(HL.status),
+                    "coinglass": CG.summary(detail=True), "hyperliquid": safe_call(HL.status), "book": safe_call(BK.status),
                     "coinalyze": safe_call(cz_status)})
 
 

@@ -355,9 +355,10 @@ def _q(v):
     return round(v / e) * e
 
 
-def build_heat(candles, step, size, price, range_pct, now=None, tiers=None):
+def build_heat(candles, step, size, price, range_pct, now=None, tiers=None, out=None):
     """Mapa REAL de Hyperliquid con el mismo formato que el estimado: segmentos por tramo en el tiempo
-    (de las grabaciones), niveles activos (las posiciones de ahora) y toques (cuando el precio llegó a un nivel)."""
+    (de las grabaciones), niveles activos (las posiciones de ahora) y toques (cuando el precio llegó a un nivel).
+    Con out: out["fuel"] = por vela (USD de largos, USD de cortos) por liquidar al cierre, o None antes de grabar."""
     now = now or time.time()
     t0, t_last = candles[0]["time"], candles[-1]["time"]
     snaps = snapshots(t0 - step, now, step)
@@ -388,6 +389,7 @@ def build_heat(candles, step, size, price, range_pct, now=None, tiers=None):
     idxs = sorted(per_candle)
     first = idxs[0] if idxs else len(candles) - 1
     state = {}
+    fuel = [None] * len(candles)
     for i in range(first, len(candles)):
         c = candles[i]
         # el precio de la vela toca niveles que estaban vivos: liquidación (real) ejecutada
@@ -412,8 +414,11 @@ def build_heat(candles, step, size, price, range_pct, now=None, tiers=None):
                 del opened[k]
             if v[0] + v[1] > 0:
                 opened[k] = (i, v[0], v[1])
+        fuel[i] = (sum(v[0] for v in state.values()), sum(v[1] for v in state.values()))
     for k, (i0, L, S) in opened.items():
         segs.append([round((k + 0.5) * size, 2), candles[i0]["time"], t_last, round(L), round(S)])
+    if out is not None:
+        out["fuel"] = fuel
     active = [[round((k + 0.5) * size, 2), round(v[0]), round(v[1]), [round(x) for x in v[2]]]
               for k, v in sorted(cur.items()) if v[0] + v[1] >= 1]
     vals = sorted(v for v in (sg[3] + sg[4] for sg in segs) if v > 0)
