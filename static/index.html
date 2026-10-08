@@ -47,6 +47,20 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 .pulse.short{border-color:#2ec4ff}
 @keyframes pulse{from{transform:scale(.3);opacity:1}to{transform:scale(2.6);opacity:0}}
 #zones{display:none;margin-top:5px;background:rgba(11,14,20,.85);border:1px solid #2b3550;border-radius:8px;padding:6px 8px;font-size:12px;line-height:1.5;width:max-content;max-width:100%}
+#help{position:absolute;right:8px;top:6px;z-index:8;background:rgba(11,14,20,.97);border:1px solid #2b3550;border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.45;display:none;width:390px;max-width:calc(100% - 16px);max-height:calc(100% - 12px);overflow-y:auto;box-sizing:border-box}
+#help .hh{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#help .hh b{font-size:15px}
+#help .x{padding:2px 10px}
+#help .muted{color:#8b95ab;font-size:11.5px}
+#help details{border-left:3px solid var(--c);background:rgba(255,255,255,.035);border-radius:6px;margin:6px 0;padding:0 8px}
+#help summary{cursor:pointer;padding:8px 0;font-weight:600;list-style:none}
+#help summary::-webkit-details-marker{display:none}
+#help summary::before{content:'▸ ';color:var(--c)}
+#help details[open] summary::before{content:'▾ '}
+#help .it{display:flex;gap:9px;align-items:flex-start;padding:5px 0;border-top:1px solid rgba(43,53,80,.7)}
+#help .ic{flex:0 0 30px;margin-top:2px}
+#help .ic.t{display:inline-block;text-align:center;color:var(--c);font-weight:700;font-size:12px}
+#help .warn{color:#FFD60A}
 #cfg{position:absolute;right:8px;top:6px;z-index:8;background:rgba(11,14,20,.96);border:1px solid #2b3550;border-radius:10px;padding:10px;font-size:13px;display:none;width:250px}
 #cfg .row{margin-bottom:10px}
 #cfg .lbl{font-size:11px;color:#aab3c5;margin-bottom:4px}
@@ -68,6 +82,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
   <button data-tf="1d">1D</button>
   <button id="bVal">✓ Validez</button>
   <button id="bCfg">⚙</button>
+  <button id="bHelp" title="Manual: qué es cada cosa">? Manual</button>
   <div id="st">cargando…</div>
   <div id="pools">
     <span>Pools:</span>
@@ -89,6 +104,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 <div id="wrap">
   <canvas id="heat"></canvas><div id="chart"></div><canvas id="fx"></canvas>
   <div id="val"></div>
+  <div id="help"></div>
   <div id="info"><div id="hdr"></div><div id="bias"></div><div id="zones"></div></div><div id="toasts"></div>
   <div id="cfg">
     <div class="row"><div class="lbl">Mapa</div><div id="cMap"></div></div>
@@ -1164,7 +1180,7 @@ document.getElementById('cMin').oninput = (e) => {
 bCfg.onclick = () => {
   const open = cfgEl.style.display !== 'block';
   cfgEl.style.display = open ? 'block' : 'none';
-  if (open) closeVal();
+  if (open) { closeVal(); closeHelp(); }
 };
 
 // ───── validez: comparación con liquidaciones reales
@@ -1295,7 +1311,7 @@ function closeVal() {
 }
 bVal.onclick = () => {
   if (valEl.style.display === 'block') { closeVal(); return; }
-  cfgEl.style.display = 'none';
+  cfgEl.style.display = 'none'; closeHelp();
   valEl.style.display = 'block';
   valEl.dataset.tf = tf;
   loadVal();
@@ -1414,6 +1430,148 @@ document.getElementById('pGroup').onchange = (e) => {
   cfg.group = v > 0 ? v : null; saveCfg(); syncPools(); data = null; lastSig = ''; load();
 };
 
+// ───── manual: qué es cada cosa, en sencillo (iconos con los mismos colores que el gráfico)
+const helpEl = document.getElementById('help');
+const bHelp = document.getElementById('bHelp');
+const svgI = (b) => `<svg class="ic" viewBox="0 0 30 16" width="30" height="16" aria-hidden="true">${b}</svg>`;
+const barsI = (up, dn) => svgI([3, 9, 15, 21].map((x, i) => `<rect x="${x}" y="${8 - [5, 3, 6, 4][i]}" width="4" height="${[5, 3, 6, 4][i]}" fill="${up}"/>` +
+  `<rect x="${x}" y="9" width="4" height="${[3, 5, 2, 4][i]}" fill="${dn}"/>`).join(''));
+const dashI = (a, b, w) => svgI(`<line x1="1" y1="5" x2="29" y2="5" stroke="${a}" stroke-dasharray="4 3" stroke-width="${w || 1.3}"/>` +
+  `<line x1="1" y1="11" x2="29" y2="11" stroke="${b}" stroke-dasharray="4 3" stroke-width="1.3"/>`);
+const HELP_ICON = {
+  candles: svgI('<line x1="9" y1="1" x2="9" y2="15" stroke="#26a69a"/><rect x="6" y="4" width="6" height="8" fill="#26a69a"/>' +
+    '<line x1="21" y1="1" x2="21" y2="14" stroke="#ef5350"/><rect x="18" y="3" width="6" height="7" fill="#ef5350"/>'),
+  price: svgI('<line x1="1" y1="8" x2="29" y2="8" stroke="#c83232" stroke-width="1.5" stroke-dasharray="2 2"/>'),
+  heat: svgI(PRO_COLS.map((c, i) => `<rect x="1" y="${1 + i * 3.8}" width="28" height="3" fill="${c}"/>`).join('')),
+  tint: svgI('<rect x="1" y="1" width="28" height="7" fill="rgba(140,20,20,0.55)"/><rect x="1" y="8" width="28" height="7" fill="rgba(20,120,45,0.5)"/>'),
+  profile: svgI(ALL.map((t, i) => `<rect x="${23 - i * 4}" y="${1 + i * 2.5}" width="${6 + i * 4}" height="2" fill="${TIER_COL[t]}"/>`).join('')),
+  curves: svgI('<polyline points="29,8 22,6 14,3 4,1" fill="none" stroke="#ff5a5a" stroke-width="1.5"/>' +
+    '<polyline points="29,8 24,10 16,13 6,15" fill="none" stroke="#3ddc84" stroke-width="1.5"/>'),
+  bias: svgI('<rect x="1" y="5" width="28" height="6" rx="3" fill="#ff9f1c"/><rect x="1" y="5" width="11" height="6" rx="3" fill="#2ec4ff"/>'),
+  bubbles: svgI('<circle cx="9" cy="8" r="5.5" fill="rgba(255,159,28,0.55)" stroke="#ff9f1c"/><circle cx="22" cy="8" r="3.5" fill="rgba(46,196,255,0.55)" stroke="#2ec4ff"/>'),
+  pulse: svgI('<circle cx="15" cy="8" r="6.5" fill="none" stroke="#ff9f1c" stroke-width="1.5"/><circle cx="15" cy="8" r="2.5" fill="none" stroke="#ff9f1c" opacity=".6"/>'),
+  hl: dashI('#ff9f1c', '#2ec4ff'),
+  book: svgI(BOOK_PAL.slice(1).map((c, i) => `<rect x="${1 + i * 4}" y="1" width="4" height="14" fill="rgba(${c[0]},${c[1]},${c[2]},${c[3]})"/>`).join('')),
+  walls: dashI('#ff9bb3', '#9be9a8', 2.2),
+  doi: barsI('rgba(38,166,154,0.9)', 'rgba(239,83,80,0.9)'),
+  liq: barsI('rgba(46,196,255,0.95)', 'rgba(255,159,28,0.95)'),
+  cvd: svgI('<polyline points="1,12 6,9 11,10 16,5 21,7 29,2" fill="none" stroke="#e8e8e8" stroke-width="1.4"/>' +
+    '<polyline points="1,15 7,12 12,13 18,9 23,11 29,7" fill="none" stroke="#b388ff" stroke-width="1.4"/>'),
+  fund: svgI('<rect x="1" y="3" width="9" height="5" fill="rgba(255,159,28,0.85)"/><rect x="11" y="9" width="8" height="4" fill="rgba(46,196,255,0.85)"/>' +
+    '<rect x="20" y="5" width="9" height="3" fill="rgba(255,159,28,0.85)"/>'),
+  fuel: svgI('<path d="M1 8 L8 6 L16 4 L24 3 L29 2 L29 8 Z" fill="rgba(46,196,255,0.55)"/><path d="M1 8 L8 10 L16 11 L24 13 L29 14 L29 8 Z" fill="rgba(255,159,28,0.55)"/>'),
+  asia: dashI('#e6e6e6', '#e6e6e6'),
+  zones: svgI('<line x1="1" y1="5" x2="29" y2="5" stroke="#2ec4ff" stroke-dasharray="1 2"/><line x1="1" y1="11" x2="29" y2="11" stroke="#ff9f1c" stroke-dasharray="1 2"/>'),
+  grad: svgI('<defs><linearGradient id="hg"><stop offset="0" stop-color="#008f8f"/><stop offset=".33" stop-color="#0fbf0f"/>' +
+    '<stop offset=".66" stop-color="#f0e60a"/><stop offset="1" stop-color="#e8100a"/></linearGradient></defs><rect x="1" y="5" width="28" height="6" rx="3" fill="url(#hg)"/>')
+};
+const TIER_NAME = { 3: 'rosa', 5: 'violeta', 10: 'azul', 25: 'verde', 50: 'amarillo', 100: 'rojo' };
+const TF_LABEL = { '5m': '5m', '15m': '15m', '1h': '1h', '4h': '4h', '1d': '1D' };
+const L_ = (t) => `<span class="L">${t}</span>`, S_ = (t) => `<span class="S">${t}</span>`;
+// [color del apartado, título, [[icono, nombre, texto], …]]; el icono puede ser un dibujo de HELP_ICON, un símbolo o null
+const HELP = [
+  ['#26a69a', 'Lo básico', [
+    ['i', '¿Qué es?', 'Un mapa estimado de dónde se liquidarían a la fuerza las posiciones apalancadas de BTC, sobre el gráfico del perpetuo BTCUSDT de Binance. Si el precio llega a una zona con muchas, se cierran de golpe y eso puede acelerar el movimiento.'],
+    ['candles', 'Velas', 'Cada vela es un periodo: 5m = 5 minutos … 1D = 1 día. Verde si cerró más arriba de lo que abrió; roja si más abajo. Las mechas marcan el máximo y el mínimo.'],
+    ['price', 'Línea «BTC 03:26»', 'El precio de ahora y lo que falta para que cierre la vela.'],
+    ['●', 'Arriba a la derecha', 'De qué sale el cálculo («estimado · 10 fuentes»), el precio y su % en 24 h, el OI total y <span class="rt">● LIVE</span> (en directo) u <span class="err">● OFFLINE</span> (se cortó; vuelve solo). Las horas van en tu hora local.']]],
+  ['#e8100a', 'Mapa de liquidaciones', [
+    ['OI', 'Cómo se calcula', `Cuando entra dinero nuevo en futuros (sube el Open Interest), se suponen largos y cortos al precio medio de esa vela, con los apalancamientos elegidos (de 3x a 100x). Cada uno tiene su precio de liquidación: ${L_('los largos, por debajo')}; ${S_('los cortos, por encima')}.`],
+    ['heat', 'Franjas de colores', 'Cada franja es un precio donde se liquidarían posiciones. Nace en la vela donde se abrieron y dura hasta que el precio la toca (ahí se da por liquidada). De menos a más: turquesa, verde, amarillo y rojo.'],
+    ['≥', '«Total ≥» y «maxHeat»', 'En la cabecera. Solo se pinta lo que pasa de «Total ≥», un % de «maxHeat» (la zona más fuerte). Se cambia en ⚙ → «Mostrar solo desde».'],
+    ['tint', 'Zona de la derecha', 'Arriba, rojiza: ahí se liquidarían cortos si el precio sube. Abajo, verdosa: largos si baja.'],
+    ['!', 'Es una estimación', 'Nadie publica las posiciones de todo el mercado: es un cálculo. En ✓ Validez se compara con liquidaciones reales.']]],
+  ['#f0e60a', 'Perfil, sesgo e imán', [
+    ['profile', 'Perfil', 'Barras de la derecha: cuánto se liquidaría en cada precio, por apalancamiento: ' +
+      ALL.map(t => `<span style="color:${TIER_COL[t]}">${TIER_NAME[t]} ${t}x</span>`).join(', ') + '.'],
+    ['curves', 'Curvas', '<span style="color:#ff5a5a">Roja</span>: cortos acumulados desde el precio hacia arriba. <span style="color:#3ddc84">Verde</span>: largos acumulados hacia abajo. Es lo que se liquidaría en total si el precio llega hasta ahí.'],
+    ['bias', 'Sesgo «±2% ▲ cortos ▼ largos»', 'Cómo se reparte la liquidez cerca del precio (' +
+      Object.entries(BIAS_WIN).map(([k, v]) => `±${v} % en ${TF_LABEL[k]}`).join(', ') + `): ${S_('▲ cortos por encima')} y ${L_('▼ largos por debajo')}.`],
+    ['◎', 'Imán', 'La zona más fuerte dentro de ese margen: su precio, a cuántos puntos está y cuánto dinero tiene. El precio a veces va a buscar esa liquidez, pero no siempre.']]],
+  ['#ff9f1c', 'Liquidaciones reales', [
+    ['bubbles', 'Burbujas (capa «Liq»)', `Liquidaciones que pasaron de verdad en 8 exchanges (desde 5.000 $). ${L_('Naranja: largos liquidados')}; ${S_('cian: cortos liquidados')}. Cuanto más grande, más dinero.`],
+    ['pulse', 'Pulso', 'Un círculo que se abre en el gráfico cuando llega una de 50.000 $ o más.'],
+    ['⚡', 'Aviso ⚡', 'Si en 2,5 segundos se juntan 250.000 $ o más del mismo lado, sale un aviso abajo a la derecha.'],
+    ['!', 'Ojo con Binance', 'Solo publica una parte (como mucho 1 por segundo): en cascadas grandes, lo real es más.']]],
+  ['#ff6fd8', 'Hyperliquid real', [
+    ['hl', 'Líneas «HL» (capa «HL»)', `Hyperliquid es un exchange en blockchain: se ve el precio exacto de liquidación de cada posición. Las más grandes salen como líneas discontinuas (${L_('naranja largos')}, ${S_('cian cortos')}): «HL corto 3.5M · 25x» = un corto de 3,5 millones con 25x.`],
+    ['HL', 'Modelo «Hyperliquid real»', 'En ⚙ → Modelo. Pinta solo esas posiciones reales, desde que se graban. Es real, pero solo de Hyperliquid, no de todo el mercado.']]],
+  ['#62bcff', 'Mapa de liquidez (libro)', [
+    ['book', 'Qué es', 'Las órdenes límite que esperan en el libro de Binance Futuros, grabadas en el tiempo. No son liquidaciones: son órdenes de compra y venta ya puestas. Azul oscuro = poco; más claro = más; blanco = muros grandes.'],
+    ['⚙', 'Cómo verlo', '⚙ → Mapa: «Liquidez (libro)» o «Las dos» (con las liquidaciones encima). El cursor dice cuánto hay: «Libro ≈ 316K–633K».'],
+    ['✂', 'Si un muro se corta', 'Lo comieron (se ejecutó) o lo quitaron.'],
+    ['⏱', 'Desde cuándo', 'Solo hay datos desde que empezó la grabación: hacia atrás sale vacío y se va llenando.'],
+    ['walls', 'Capa «Libro»', 'Otra cosa: los muros del libro de este momento, como líneas a la derecha. <span style="color:#9be9a8">Verde: compra</span>; <span style="color:#ff9bb3">rosa: venta</span>.']]],
+  ['#b388ff', 'Paneles de abajo', [
+    ['▤', 'Cuáles', 'Hasta 3, se eligen en ⚙ → Paneles de abajo. Si añades otro, se quita el que pusiste primero.'],
+    ['doi', 'ΔOI', 'Cambio del Open Interest en cada vela. <span style="color:#26a69a">Verde ▲: entran posiciones nuevas</span>. <span style="color:#ef5350">Rojo ▼: se cierran</span>.'],
+    ['liq', 'Liquidaciones', `Las reales de cada vela. ${S_('▲ cian: cortos')}. ${L_('▼ naranja: largos')}.`],
+    ['cvd', 'CVD', 'Compras menos ventas a mercado, acumulado. Si sube, mandan los compradores; si baja, los vendedores. <span style="color:#e8e8e8">Blanco: futuros</span>; <span style="color:#b388ff">violeta: spot</span>.'],
+    ['fund', 'Funding', `Lo que se pagan entre sí largos y cortos cada 8 h. ${L_('▲ naranja: pagan los largos')} (hay más ganas de largo). ${S_('▼ cian: pagan los cortos')}. «ahora» = el previsto.`],
+    ['fuel', 'Gasolina', `Liquidaciones estimadas que siguen pendientes. ${S_('Arriba, cian: cortos que saltarían si sube')}. ${L_('Abajo, naranja: largos si baja')}. Mucha de un lado puede acelerar un movimiento hacia ese lado.`],
+    ['log', 'Escala log', 'En ΔOI y liquidaciones, una barra el doble de alta no es el doble de dinero: así una cascada enorme no tapa al resto. El «máx» de la derecha es el valor más alto que se ve.']]],
+  ['#2D6CDF', 'Barra de arriba', [
+    ['☑', 'Pools 3X … 100X', 'Qué apalancamientos entran en el mapa. Al lado de cada uno, cuánto hay en el precio del cursor. Si los cambias a mano, pasa al modelo Open Interest.'],
+    ['Σ', 'Total y «Si llega aquí»', 'Total: lo que hay en el precio del cursor. «Si llega aquí»: lo que se liquidaría en total si el precio fuera desde donde está hasta el cursor.'],
+    ['▮', 'Lectura de la vela', 'ΔOI, liquidado, delta, funding y gasolina de la vela bajo el cursor (y «Libro ≈» con el mapa de liquidez).'],
+    ['G', 'Grupo', 'Grosor de cada franja: ≈ grupo × 5 puntos. Vacío = automático (recomendado). En amarillo si es tan bajo que las líneas salen finísimas.'],
+    ['A', 'Auto', 'Vuelve al modelo Auto.'],
+    ['grad', 'Intensidad', 'La barrita de colores: más a la derecha, las zonas se ven más fuertes (más rojo).']]],
+  ['#9aa4b8', '⚙ Ajustes y capas', [
+    ['⚙', 'Mapa', 'Liquidaciones, Liquidez (libro) o Las dos.'],
+    ['◐', 'Vista', 'Pro: 4 colores y solo lo fuerte. Completa: todos los niveles en degradado.'],
+    ['▤', 'Capas', `Perfil (barras de la derecha) · Paneles (los de abajo) · Calor / Lado (color por cantidad, o ${L_('naranja largos')} y ${S_('cian cortos')}) · Zonas · Asia · Liq (burbujas) · Libro (muros de ahora) · HL (Hyperliquid).`],
+    ['zones', 'Zonas', 'Las 5 zonas más fuertes (precio, distancia en puntos, lado, dinero y ●●● fuerza) y líneas en el eje de las más cercanas.'],
+    ['asia', 'Asia', 'Máximo y mínimo de la sesión asiática (<span id="helpAsia">de 00:00 a 07:00 UTC</span>). «Barrido»: una vela posterior pasa ese nivel con la mecha y cierra de vuelta dentro.'],
+    ['€', 'Exchanges del Open Interest', 'De qué exchanges sale el cálculo. Por defecto, todos.'],
+    ['M', 'Modelo', 'Auto: la mejor combinación probada contra liquidaciones reales (se repite cada 3 h). Open Interest: con tus apalancamientos. Volumen: usa el volumen de cada vela en vez del OI. Hyperliquid real: posiciones de verdad de Hyperliquid.'],
+    ['%', 'Mostrar solo desde', 'El filtro «Total ≥»: más alto = menos franjas, solo las fuertes.']]],
+  ['#3ddc84', '✓ Validez', [
+    ['✓', 'Acierto', 'Del dinero liquidado de verdad, qué parte cayó en zonas que el mapa ya marcaba antes.'],
+    ['?', 'Azar', 'Lo que se acertaría marcando precios al azar cerca. <span class="ok">✓</span> si el mapa acierta 1,5 veces o más que el azar; <span class="warn">≈</span> si algo más; <span class="err">✗</span> si no mejora.'],
+    ['…', 'Lo demás', 'Calibración, fuentes del OI, funding, ratio largos/cortos, estado de los 8 exchanges, Hyperliquid y la grabación del libro.']]],
+  ['#e6e6e6', 'Palabras clave', [
+    [null, 'Largo / corto', `${L_('Largo')} gana si sube; ${S_('corto')}, si baja.`],
+    [null, 'Apalancamiento (x)', 'Multiplica la posición. Con 10x te liquida un movimiento en contra de algo menos del 10 %; con 100x, de menos del 1 %.'],
+    [null, 'Liquidación', 'Cierre forzoso cuando se acaba el margen: el exchange vende (si eras largo) o compra (si eras corto) a mercado.'],
+    [null, 'Margen de mantenimiento', 'El margen mínimo que pide el exchange; si tu posición baja de ahí, te liquidan.'],
+    [null, 'Open Interest (OI)', 'Dinero total en contratos de futuros abiertos.'],
+    [null, 'Funding', 'Pago periódico entre largos y cortos que mantiene el perpetuo pegado al precio de contado.'],
+    [null, 'Perpetuo', 'Futuro sin fecha de vencimiento.'],
+    [null, 'Spot (contado)', 'Comprar o vender BTC directamente, sin contrato de futuros.'],
+    [null, 'Muro', 'Mucho dinero en órdenes límite en un mismo precio.'],
+    [null, 'Puntos (pts)', '1 punto = 1 $ en el precio de BTC. «−1.281 pts» = 1.281 $ por debajo.'],
+    [null, 'K · M · B', 'Miles, millones y miles de millones de dólares.']]]
+];
+let helpBuilt = false;
+function buildHelp() {
+  const ico = (k) => k === null ? '' : HELP_ICON[k] || `<span class="ic t">${k}</span>`;
+  helpEl.innerHTML = `<div class="hh"><b>Manual</b><button class="x" id="hClose" title="Cerrar">✕</button></div>
+    <div class="muted">Qué es cada cosa, en sencillo. Toca un apartado para abrirlo.</div>` +
+    HELP.map(([c, title, items]) => `<details style="--c:${c}"><summary>${title}</summary>` +
+      items.map(([k, name, txt]) => `<div class="it">${ico(k)}<div><b>${name}</b> · ${txt}</div></div>`).join('') + '</details>').join('') +
+    '<div class="muted" style="margin-top:8px">Es una herramienta de contexto: no es una recomendación ni una señal de entrada.</div>';
+  document.getElementById('hClose').onclick = closeHelp;
+  helpBuilt = true;
+}
+function helpAsiaText() {
+  // horas de la sesión asiática en la hora de quien mira (el servidor la define en UTC)
+  const a = data && data.asia, d = new Date();
+  const s = a ? a.start : Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0) / 1000, e = a ? a.end : s + 7 * 3600;
+  const h = (t) => new Date(t * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  return `de ${h(s)} a ${h(e)}, tu hora`;
+}
+function closeHelp() { helpEl.style.display = 'none'; }
+bHelp.onclick = () => {
+  if (helpEl.style.display === 'block') { closeHelp(); return; }
+  cfgEl.style.display = 'none'; closeVal();
+  if (!helpBuilt) buildHelp();
+  const ha = document.getElementById('helpAsia');
+  if (ha) ha.textContent = helpAsiaText();
+  helpEl.style.display = 'block';
+};
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelp(); });
+
 window.addEventListener('resize', layout);
 if (window.ResizeObserver) new ResizeObserver(layout).observe(bar);   // la barra cambia de alto en el móvil
 layout();
@@ -1422,6 +1580,7 @@ buildCfg();
 requestAnimationFrame(render);
 load();
 pollLive();
+if (/^#manual$/i.test(location.hash || '')) bHelp.onclick();
 setInterval(load, 60000);
 setInterval(pollLive, 4000);
 setInterval(tickCountdown, 1000);

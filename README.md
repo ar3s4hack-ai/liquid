@@ -5,6 +5,8 @@ comprobado contra liquidaciones **reales** de 8 exchanges y contra las posicione
 También graba el **libro de órdenes** de Binance para el mapa de liquidez. No es una señal de entrada.
 
 ## Qué se ve
+- **? Manual** (arriba, junto a ⚙): explica cada cosa en sencillo, por apartados plegables y con los mismos colores
+  del gráfico. Para mandarlo a alguien: la dirección de la web terminada en `/#manual` lo abre directamente.
 - **Heatmap** (vista Pro por defecto): solo se pinta lo que supera «Total ≥» (24 % de «maxHeat»), en 4 colores
   (turquesa, verde, amarillo, rojo). La vista «Completa» muestra todos los niveles con degradado.
 - **Perfil** a la derecha, apilado por apalancamiento, con curvas acumuladas (roja: cortos arriba, verde: largos abajo).
