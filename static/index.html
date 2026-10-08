@@ -1190,7 +1190,8 @@ function bookBlock(b) {
   if (!b || b.error) return b && b.error ? `<h4>Mapa de liquidez</h4><div class="bad">Error: ${esc(b.error)}</div>` : '';
   const since = b.since && b.since.book5 ? fmtLocalFull(b.since.book5) : null;
   return `<h4>Mapa de liquidez (libro de Binance)</h4>
-    <div>${b.synced ? '<span class="ok">●</span> sincronizado' : '<span class="bad">●</span> sin sincronizar'} · ${fmt(b.levels || 0)} niveles${b.bid_low ? ` (${fmt(b.bid_low)} – ${fmt(b.ask_high)})` : ''}</div>
+    <div>${b.synced ? '<span class="ok">●</span> sincronizado' : '<span class="bad">●</span> sin sincronizar'} · ${fmt(b.levels || 0)} niveles` +
+    (b.coverage !== undefined && b.coverage !== null ? ` · cubre el <b>${pct(b.coverage)}</b> de los tramos de 10 $ a ±${b.range_pct || 6} %` : '') + `</div>
     <div class="muted">${since ? 'Grabando desde ' + since : 'Aún sin bloques guardados'} · ${(b.rows && b.rows.book5) || 0} bloques de 5 min. Son órdenes límite reales, no liquidaciones. Los niveles lejanos aparecen cuando alguien pone o quita órdenes ahí: el libro se completa con las horas.</div>`;
 }
 function hlBlock(v) {

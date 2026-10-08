@@ -164,11 +164,19 @@ class LocalBook:
         return out
 
     def info(self):
+        """Estado del libro. coverage: parte de los tramos de BIN_USD a ±RANGE_PCT que ya tienen alguna orden
+        (al sincronizar solo se ven los 1000 niveles más cercanos; los lejanos van llegando con los cambios)."""
         with self.lock:
             if not self.bids or not self.asks:
                 return {"synced": self.synced, "levels": 0}
+            bb, ba = max(self.bids), min(self.asks)
+            mid = (bb + ba) / 2
+            lo, hi = mid * (1 - RANGE_PCT / 100), mid * (1 + RANGE_PCT / 100)
+            have = {int(p // BIN_USD) for p in self.bids if p >= lo} | {int(p // BIN_USD) for p in self.asks if p <= hi}
+            total = int(hi // BIN_USD) - int(lo // BIN_USD) + 1
             return {"synced": self.synced, "levels": len(self.bids) + len(self.asks),
-                    "bid_low": min(self.bids), "ask_high": max(self.asks), "best_bid": max(self.bids), "best_ask": min(self.asks)}
+                    "bid_low": min(self.bids), "ask_high": max(self.asks), "best_bid": bb, "best_ask": ba,
+                    "coverage": round(len(have) / total, 3), "range_pct": RANGE_PCT}
 
 
 BOOK = LocalBook()
