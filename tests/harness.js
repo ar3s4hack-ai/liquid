@@ -660,7 +660,8 @@ function makeEnv(opts) {
     env.get('sig').onclick(); env.get('bVal').onclick(); await settle();
     if (env.get('sigp').style.display !== 'none' || env.get('val').style.display !== 'block') throw new Error('✓ Validez cierra el detalle');
     const vh = env.get('val').innerHTML;
-    for (const x of ['Señal de tendencia (chip de arriba a la izquierda)', 'Probado y descartado', 'barrido del rango asiático', 'EQH/EQL', 'Cortos: 40 de 41'])
+    for (const x of ['Señal de tendencia (chip de arriba a la izquierda)', 'Probado y descartado', 'barrido del rango asiático', 'EQH/EQL', 'Cortos: 40 de 41',
+      '19 datos extra como filtro', 'Ninguno mejora en 2024-2026'])
       if (!vh.includes(x)) throw new Error('✓ Validez no explica: ' + x);
     env.js('closeVal()');
     // COMPRA y VENTA

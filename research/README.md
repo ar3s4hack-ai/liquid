@@ -85,6 +85,48 @@ contra de la tendencia diaria: ningún grupo aguanta en los dos periodos.
 Las «bandas de ruptura» del EWO de TradingView (EWO[Giskard], EWO Breaking Bands) no publican su fórmula; aquí son la
 media exponencial (35) de la parte positiva y de la negativa del oscilador.
 
+## Datos extra (on-chain, sentimiento, derivados, ETF y macro)
+
+Después se probaron 19 datos más como filtro: comprado solo con 3 de 3 **y** el dato a favor (también como cuarto voto,
+3 de 4: no mejora en ningún caso). Umbrales habituales fijados antes de mirar, retraso de publicación de cada fuente
+y «azar» = % de veces que el mismo dato desplazado en el tiempo al azar da igual o más Sharpe.
+
+Sharpe de la señal actual → con el filtro (dentro de muestra: hasta 2023; fuera: 2024-2026):
+
+| Dato (a favor = se puede estar comprado) | Desde | Spot dentro | Spot 2024-26 | Futuros dentro | Futuros 2024-26 | Azar spot / futuros |
+|---|---|---|---|---|---|---|
+| Fear & Greed < 80 (sin euforia) | 2018 | 1,17 → 0,77 | 1,15 → 1,12 | 1,32 → 0,93 | 1,01 → 1,02 | 100 % / 98 % |
+| MVRV < 3,5 (sin euforia on-chain) | 2018 | 1,15 → 1,20 | 1,15 → 1,15 | 1,32 → 1,49 | 1,01 → 1,01 | 3 % / 0 % |
+| Stablecoins crecen (30 días) | 2018 | 1,15 → 1,30 | 1,15 → 1,04 | 1,32 → 1,24 | 1,01 → 0,91 | 9 % / 38 % |
+| Dólar bajo su EMA50 | 2018 | 1,15 → 0,78 | 1,15 → 0,49 | 1,32 → 1,06 | 1,01 → 0,44 | 62 % / 47 % |
+| Tipos reales bajan (30 días) | 2018 | 1,15 → 0,98 | 1,15 → 0,22 | 1,32 → 1,27 | 1,01 → 0,15 | 48 % / 52 % |
+| Liquidez de la Fed sube (4 semanas) | 2018 | 1,15 → 1,22 | 1,15 → 0,45 | 1,32 → 1,72 | 1,01 → 0,38 | 20 % / 8 % |
+| S&P 500 sobre su media de 200 | 2018 | 1,15 → 1,03 | 1,15 → 0,93 | 1,32 → 1,17 | 1,01 → 0,80 | 44 % / 54 % |
+| Prima de Coinbase > 0 (7 días) | 2018 | 1,15 → 1,05 | 1,15 → 0,87 | 1,32 → 1,22 | 1,01 → 0,75 | 28 % / 30 % |
+| Atención (visitas a «Bitcoin» en Wikipedia) al alza | 2018 | 1,15 → 0,89 | 1,15 → 0,47 | 1,32 → 1,10 | 1,01 → 0,37 | 33 % / 36 % |
+| Salen BTC de los exchanges (7 días) | 2018 | 1,15 → **1,52** | 1,15 → 0,94 | 1,32 → **1,58** | 1,01 → 0,87 | 0 % / 3 % |
+| Saldo en exchanges baja (30 días) | 2018 | 1,15 → 0,81 | 1,15 → 1,05 | 1,32 → 0,82 | 1,01 → 0,97 | 21 % / 34 % |
+| Mineros sin capitular (hash rate 30 > 60 días) | 2018 | 1,15 → 0,94 | 1,15 → 0,94 | 1,32 → 1,03 | 1,01 → 0,81 | 71 % / 81 % |
+| Funding sin exceso (7 días, sin el 10 % más alto del año) | 2020 | 1,59 → **1,99** | 1,15 → 0,80 | 1,32 → **1,82** | 1,01 → 0,72 | 6 % / 1 % |
+| OI sin subidón (30 días) | 2022 | 1,39 → 1,24 | 1,15 → 0,59 | 1,24 → 1,13 | 1,01 → 0,53 | 98 % / 97 % |
+| Largos/cortos sin exceso | 2022 | 1,35 → 1,35 | 1,15 → 1,02 | 1,21 → 1,21 | 1,01 → 0,89 | 41 % / 51 % |
+| Volatilidad implícita (DVOL) sin pico | 2021 | 0,77 → 0,82 | 1,15 → 1,02 | 0,62 → 0,68 | 1,01 → 0,93 | 64 % / 56 % |
+| ETF con entradas netas (7 días) | 2024 | — | 1,15 → 0,99 | — | 1,01 → 0,87 | 34 % / 38 % |
+| Volatilidad realizada sin pico (30 días) | 2018 | 1,26 → 1,36 | 1,15 → 1,22 | 1,32 → 1,31 | 1,01 → 1,11 | 3 % / 20 % |
+| Compras a mercado > 50 % (7 días) | 2020 | 1,60 → 1,31 | 1,15 → 1,00 | 1,32 → 1,47 | 1,01 → 0,96 | 9 % / 3 % |
+
+- **Ninguno mejora en los dos periodos y en los dos mercados a la vez.** Los mejores hasta 2023 (salidas de los exchanges,
+  funding, liquidez de la Fed) empeoran la señal desde 2024: lo que funcionaba dejó de funcionar, justo lo que se
+  quiere evitar.
+- Quitar la euforia (Fear & Greed ≥ 80, OI disparado) saca de los mejores tramos alcistas: peor que el azar.
+- MVRV > 3,5 solo pasó una vez (2021); en 2024-2026 no llegó y no cambia nada.
+- La volatilidad realizada es lo más cercano a aprobar: mejora en spot con casi todos los ajustes, pero en futuros depende
+  del umbral (con el percentil 90 de 30 o 60 días no mejora o empeora). No basta para meterla.
+- Hacer que la señal cambie menos de estado tampoco ayuda: salir solo con 1 de 3 o pedir 3 de 3 durante 24 h baja el
+  Sharpe de 2024-2026 (spot de 1,15 a 0,85 y 0,92); decidir solo al cierre diario da lo mismo (1,11).
+- En la literatura pasa lo mismo: el impulso (momentum) es lo que más predice en BTC; el on-chain es lo más débil;
+  funding, stablecoins, Fear & Greed y ETF explican poco o van detrás del precio; M2 y dólar, con retrasos inestables.
+
 ## Repetirlo
 
 ```bash
@@ -97,4 +139,6 @@ python3 photo.py                      # votos de indicadores, EQH/EQL y rango de
 python3 elliott.py                    # onda 3 por zigzag
 python3 ensemble.py && python3 sens.py   # los 3 votos juntos, probabilidades y sensibilidad
 python3 final_stats.py                # números publicados, con trend.py del servidor (y comprueba que coincide)
+cd .. && python3 research/get_extra.py && cd research   # datos extra (~25 MB)
+python3 extra.py && python3 volcheck.py && python3 variants.py   # 19 datos extra, volatilidad y variantes de la regla
 ```

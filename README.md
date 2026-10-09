@@ -33,7 +33,8 @@ señal es el chip de tendencia de fondo (COMPRA · ESPERA · VENTA), probado con
   ella perdió dinero). Al tocarlo: los votos, desde cuándo, a qué cierre diario cambia y el estudio. BTC 2018-2026 con
   comisiones: +1.963 % frente a +496 % de aguantar y peor caída −49 % frente a −81 %; acierta 4 de cada 10 operaciones
   y en años muy alcistas gana menos que aguantar. SMC/ICT, rango asiático, ondas de Elliott, Bollinger, votos de
-  indicadores de 5m y EQH/EQL no superaron la prueba. Todo en `research/` (scripts y resultados).
+  indicadores de 5m y EQH/EQL no superaron la prueba, ni 19 datos extra como filtro (on-chain, Fear & Greed,
+  funding, OI, ETF, stablecoins, prima de Coinbase, macro…). Todo en `research/` (scripts y resultados).
 - **Sesgo**: reparto de la liquidez cerca del precio (±2 % en 5m … ±20 % en 1D) y el «imán»: la zona más fuerte dentro de ese margen.
 - **En directo**: precio y vela de Binance por WebSocket; liquidaciones reales de los 8 exchanges cada 4 s,
   con pulso en el gráfico (≥ 50K $) y aviso ⚡ cuando suman ≥ 250K $ en 2,5 s.
