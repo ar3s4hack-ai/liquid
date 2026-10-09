@@ -727,22 +727,32 @@ def validate(candles, step, heat, touches, events, covered, min_ratio=0.1, tol_p
                     break
         return found
 
-    n = hits_n = 0
-    w_tot = w_hit = w_base = 0.0
-    ev_index = defaultdict(list)
+    # cada liquidación: vela, lado y tramo (el índice para «confirmación» lleva todas, también las de fuera)
+    evs = []
+    ev_index = defaultdict(set)
     for e in events:
         tc = e["ts"] // 1000
         tc -= tc % step
         px = e["mkt"] or e["price"]
         b = math.floor(px / size)
-        ev_index[(tc, e["side"])].append(b)
-        if tc <= t_first or tc > t_last:
-            continue
-        act = active(tc, e["side"], b - win - tol, b + win + tol)
-        hit = any(abs(k - b) <= tol for k in act)
-        positions = range(b - win, b + win + 1)
-        base = sum(1 for q in positions if any(abs(k - q) <= tol for k in act)) / len(positions)
-        w = e["usd"] or 1.0
+        ev_index[(tc, e["side"])].add(b)
+        if t_first < tc <= t_last:
+            evs.append((tc, e["side"], b, e["usd"] or 1.0))
+    # tramos fuertes activos: una búsqueda por vela y lado (no por liquidación), en el rango que cubren sus eventos,
+    # ya ensanchada a ±tol. Da lo mismo que buscar evento a evento: lo de fuera de ±(win+tol) no puede tocar su ventana.
+    span = {}
+    for tc, side, b, _ in evs:
+        lo, hi = span.get((tc, side), (b, b))
+        span[(tc, side)] = (min(lo, b), max(hi, b))
+    near = {key: {k + d for k in active(key[0], key[1], lo - win - tol, hi + win + tol) for d in range(-tol, tol + 1)}
+            for key, (lo, hi) in span.items()}
+    n = hits_n = 0
+    w_tot = w_hit = w_base = 0.0
+    width = 2 * win + 1
+    for tc, side, b, w in evs:
+        nr = near[(tc, side)]
+        hit = b in nr
+        base = sum(1 for q in range(b - win, b + win + 1) if q in nr) / width
         n += 1
         hits_n += hit
         w_tot += w
@@ -752,11 +762,10 @@ def validate(candles, step, heat, touches, events, covered, min_ratio=0.1, tol_p
     def is_covered(tc):
         return any(m in covered for m in range(tc - tc % 60, tc + step, 60))
 
+    ev_near = {key: {x + d for x in bins for d in range(-tol, tol + 1)} for key, bins in ev_index.items()}
+
     def confirmed(tc, side, b):
-        for t in (tc, tc + step):
-            if any(abs(x - b) <= tol for x in ev_index.get((t, side), ())):
-                return True
-        return False
+        return b in ev_near.get((tc, side), ()) or b in ev_near.get((tc + step, side), ())
 
     strong = conf = 0
     for (b, i, side), vol in touches.items():

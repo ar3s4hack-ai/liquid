@@ -8,6 +8,7 @@ Hyperliquid es on-chain: cada posición abierta publica su precio de liquidació
 - Cada 5 min se graba el mapa por tramos (largos debajo del precio, cortos encima) para verlo en el tiempo.
 Solo es Hyperliquid y solo las posiciones encontradas: no es todo el mercado, pero lo que hay es real, no estimado.
 """
+import bisect
 import json
 import math
 import os
@@ -310,14 +311,26 @@ def status():
 
 # ───────────── Grabación cada 5 min y mapa en el tiempo ─────────────
 def snapshot(price, now=None):
-    """Graba los niveles actuales por precio exacto de liquidación (al céntimo), para pintarlos en el tiempo
-    con el mismo tramo que se use después (así lo grabado y lo de ahora caen en el mismo tramo)."""
+    """Graba las posiciones de ahora para pintarlas en el tiempo con el tramo que se use después: por columnas
+    (precio exacto de liquidación al céntimo, USD con signo: + largos, − cortos, y grupo de apalancamiento).
+    Así pesa la mitad que por filas y se lee 3-4 veces más rápido."""
     if not price:
         return 0
     now = int(now or time.time())
-    lv = levels(price, None)
-    rows = [[b, round(L), round(S), [round(x) for x in tv]] for b, (L, S, tv) in sorted(lv.items()) if L + S >= 1000]
-    data = json.dumps({"v": 2, "rows": rows}, separators=(",", ":"))
+    P, U, T = [], [], []
+    for p in positions().values():
+        liq = p.get("liq")
+        if not liq:
+            continue
+        side = 1 if p["szi"] > 0 else -1
+        if (side == 1 and liq >= price) or (side == -1 and liq <= price):
+            continue                            # ya quedó al otro lado del precio
+        usd = abs(p["szi"]) * liq
+        if usd >= 1000:
+            P.append(round(liq, 2))
+            U.append(round(usd) * side)
+            T.append(TIERS.index(tier_of(p["lev"])))
+    data = json.dumps({"v": 3, "p": P, "u": U, "t": T}, separators=(",", ":"))
     with LQ._db_lock:
         c = _db()
         c.execute("INSERT OR REPLACE INTO hl_snap VALUES (?, ?, ?)", (now, float(price), data))
@@ -325,7 +338,7 @@ def snapshot(price, now=None):
         c.commit()
     with _lock:
         STAT["snap_at"] = now
-    return len(rows)
+    return len(P)
 
 
 def snapshots(t0, t1, step=None):
@@ -340,10 +353,9 @@ def snapshots(t0, t1, step=None):
     out = []
     for ts, price, data in rows:
         try:
-            d = json.loads(data)
+            out.append((ts, price, json.loads(data)))
         except ValueError:
             continue
-        out.append((ts, price, d.get("rows") or []))
     return out
 
 
@@ -364,23 +376,32 @@ def build_heat(candles, step, size, price, range_pct, now=None, tiers=None, out=
     snaps = snapshots(t0 - step, now, step)
     lo, hi = price * (1 - range_pct / 100), price * (1 + range_pct / 100)
     tidx = {c["time"]: i for i, c in enumerate(candles)}
-    sel = [TIERS.index(t) for t in tiers if t in TIERS] if tiers and set(tiers) != set(TIERS) else None
+    sel = {TIERS.index(t) for t in tiers if t in TIERS} if tiers and set(tiers) != set(TIERS) else None
     per_candle = {}            # índice de vela -> {tramo: (L, S)} de la última grabación dentro de la vela
-    for ts, _, rows in snaps:
+    for ts, _, d in snaps:
         tc = max(t0, min(t_last, ts - ts % step))
         i = tidx.get(tc)
         if i is None:
             continue
         cell = defaultdict(lambda: [0.0, 0.0])
-        for p, L, S, tv in rows:
-            if not (lo <= p <= hi):
-                continue
-            if sel is not None:                 # solo los apalancamientos elegidos (un tramo es de largos o de cortos)
-                part = sum(tv[j] for j in sel if j < len(tv))
-                L, S = (part, 0) if L >= S else (0, part)
-            k = math.floor(p / size)
-            cell[k][0] += L
-            cell[k][1] += S
+        if d.get("v") == 3:
+            for p, u, ti in zip(d["p"], d["u"], d["t"]):
+                if lo <= p <= hi and (sel is None or ti in sel):
+                    cl = cell[math.floor(p / size)]
+                    if u > 0:
+                        cl[0] += u
+                    else:
+                        cl[1] -= u
+        else:                                   # grabaciones por filas (antes del 9-10-2026): se borran solas a los 7 días
+            for p, L, S, tv in d.get("rows") or ():
+                if not (lo <= p <= hi):
+                    continue
+                if sel is not None:             # solo los apalancamientos elegidos (un tramo es de largos o de cortos)
+                    part = sum(tv[j] for j in sel if j < len(tv))
+                    L, S = (part, 0) if L >= S else (0, part)
+                k = math.floor(p / size)
+                cell[k][0] += L
+                cell[k][1] += S
         per_candle[i] = cell
     # lo de ahora (posiciones al día) en la última vela
     cur = levels(price, size, range_pct, tiers=tiers)
@@ -389,22 +410,56 @@ def build_heat(candles, step, size, price, range_pct, now=None, tiers=None, out=
     idxs = sorted(per_candle)
     first = idxs[0] if idxs else len(candles) - 1
     state = {}
+    lk, sk = [], []             # tramos con largos / con cortos vivos, ordenados: solo se miran los que la vela puede tocar
+    tot_l = tot_s = 0
     fuel = [None] * len(candles)
+    qmemo = {}                  # las grabaciones seguidas repiten casi siempre los mismos importes
+
+    def q(v):
+        r = qmemo.get(v)
+        if r is None:
+            r = qmemo[v] = _q(v)
+        return r
+
     for i in range(first, len(candles)):
         c = candles[i]
-        # el precio de la vela toca niveles que estaban vivos: liquidación (real) ejecutada
-        for k, (L, S) in list(state.items()):
-            p = (k + 0.5) * size
-            if L and c["low"] <= p:
+        check = []
+        # el precio de la vela toca niveles que estaban vivos: liquidación (real) ejecutada.
+        # largos: se tocan si el mínimo llega a su precio (todos los de encima); cortos: si el máximo llega (todos los de debajo)
+        if lk:
+            low = c["low"]
+            j = bisect.bisect_left(lk, math.floor(low / size) - 1)
+            while j < len(lk) and (lk[j] + 0.5) * size < low:
+                j += 1
+            for k in lk[j:]:
+                L, S = state[k]
                 touches[(k, i, 1)] += L
-                L = 0
-            if S and c["high"] >= p:
+                state[k] = (0, S)
+                tot_l -= L
+                check.append(k)
+            del lk[j:]
+        if sk:
+            high = c["high"]
+            j = bisect.bisect_right(sk, math.floor(high / size) + 1)
+            while j > 0 and (sk[j - 1] + 0.5) * size > high:
+                j -= 1
+            for k in sk[:j]:
+                L, S = state[k]
                 touches[(k, i, -1)] += S
-                S = 0
-            state[k] = (L, S)
+                state[k] = (L, 0)
+                tot_s -= S
+                check.append(k)
+            del sk[:j]
         if i in per_candle:
-            state = {k: (_q(v[0]), _q(v[1])) for k, v in per_candle[i].items()}
-        for k in set(state) | set(opened):
+            new = {k: (q(v[0]), q(v[1])) for k, v in per_candle[i].items()}
+            if new != state:
+                check = set(check) | set(new) | set(state)
+                state = new
+                lk = sorted(k for k, v in state.items() if v[0])
+                sk = sorted(k for k, v in state.items() if v[1])
+                tot_l = sum(v[0] for v in state.values())
+                tot_s = sum(v[1] for v in state.values())
+        for k in check:
             v = state.get(k, (0, 0))
             o = opened.get(k)
             if o and (o[1], o[2]) == v:
@@ -414,7 +469,7 @@ def build_heat(candles, step, size, price, range_pct, now=None, tiers=None, out=
                 del opened[k]
             if v[0] + v[1] > 0:
                 opened[k] = (i, v[0], v[1])
-        fuel[i] = (sum(v[0] for v in state.values()), sum(v[1] for v in state.values()))
+        fuel[i] = (tot_l, tot_s)
     for k, (i0, L, S) in opened.items():
         segs.append([round((k + 0.5) * size, 2), candles[i0]["time"], t_last, round(L), round(S)])
     if out is not None:

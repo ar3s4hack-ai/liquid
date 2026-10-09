@@ -292,17 +292,41 @@ function signature() {
     Math.round((livePrice ?? data.price) / (data.heat.size || 1)), version].join('|');
 }
 
+// Conversión rápida precio→y y vela→x para el fotograma en curso. El eje de precios es lineal y las velas van a
+// distancia fija, así que con dos puntos de Lightweight Charts basta (miles de tramos por fotograma sin preguntarle uno a uno).
+let M = null;
+function mapper() {
+  const ts = chart.timeScale(), cs = data.candles, n = cs.length;
+  const xa = ts.timeToCoordinate(cs[0].time), xb = n > 1 ? ts.timeToCoordinate(cs[n - 1].time) : null;
+  const p0 = data.price, p1 = data.price * 1.01;
+  const ya = series.priceToCoordinate(p0), yb = series.priceToCoordinate(p1);
+  const dx = xa !== null && xb !== null ? (xb - xa) / (n - 1) : null;
+  const ky = ya !== null && yb !== null ? (yb - ya) / (p1 - p0) : null;
+  return {
+    x: dx !== null ? (t) => { const i = tindex[t]; return i !== undefined ? xa + i * dx : ts.timeToCoordinate(t); } : (t) => ts.timeToCoordinate(t),
+    y: ky !== null ? (p) => ya + (p - p0) * ky : (p) => series.priceToCoordinate(p)
+  };
+}
+// rectángulos agrupados por color: un cambio de color por grupo en vez de uno por tramo
+function fillGroups(c, groups) {
+  for (const [col, g] of groups) {
+    c.fillStyle = col;
+    for (let k = 0; k < g.length; k += 4) c.fillRect(g[k], g[k + 1], g[k + 2], g[k + 3]);
+  }
+}
+
 function drawTime(w, h) {
   const ts = chart.timeScale();
   const bs = ts.options().barSpacing;
   const lastT = data.candles[data.candles.length - 1].time;
-  const xLast = ts.timeToCoordinate(lastT);
+  const xLast = M.x(lastT);
   const half = data.heat.size / 2;
   const pro = cfg.view === 'pro';
   const max = pro ? proMax() : data.heat.max;
   const minR = Math.max(0.005, cfg.minPct / 100);
   const FF = data.heat.F || {}, FL = FF.L, FS = FF.S;
   if (!(max > 0) || xLast === null) return;
+  const groups = new Map();
   for (const [p, t0, t1, mL, mS] of data.heat.segments) {
     const j = tindex[t1];
     const L = FL && j !== undefined ? mL * FL[j] : mL;
@@ -310,18 +334,22 @@ function drawTime(w, h) {
     if (L + S <= 0) continue;
     const ratio = Math.min(1, (L + S) / max);
     if (ratio < minR) continue;
-    const y1 = series.priceToCoordinate(p + half);
-    const y2 = series.priceToCoordinate(p - half);
-    let x1 = ts.timeToCoordinate(t0);
-    let x2 = t1 >= lastT ? xLast : ts.timeToCoordinate(t1);
-    if (y1 === null || y2 === null || x1 === null || x2 === null) continue;
+    const y1 = M.y(p + half);
+    const y2 = M.y(p - half);
+    if (y1 === null || y2 === null || y2 < 0 || y1 > h) continue;      // fuera de la vista: no se pinta
+    let x1 = M.x(t0);
+    let x2 = t1 >= lastT ? xLast : M.x(t1);
+    if (x1 === null || x2 === null) continue;
     x1 -= bs / 2; x2 += bs / 2;
     if (x2 < 0 || x1 > w) continue;
     const xs = Math.max(0, x1);
-    ctx.fillStyle = pro ? proColor(ratio, minR, L / (L + S)) : fillFor(ratio, L / (L + S));
-    ctx.fillRect(xs, y1, x2 - xs, Math.max(1, y2 - y1));
+    const col = pro ? proColor(ratio, minR, L / (L + S)) : fillFor(ratio, L / (L + S));
+    let g = groups.get(col);
+    if (!g) groups.set(col, g = []);
+    g.push(xs, y1, x2 - xs, Math.max(1, y2 - y1));
   }
-  if (pro && bs >= 3) drawStripes(w, h, ts, bs);
+  fillGroups(ctx, groups);
+  if (pro && bs >= 3) drawStripes(w, h, bs);
 }
 
 function proColor(ratio, minR, longShare) {
@@ -330,12 +358,12 @@ function proColor(ratio, minR, longShare) {
   return PRO_COLS[q < 0.25 ? 0 : q < 0.5 ? 1 : q < 0.75 ? 2 : 3];
 }
 
-function drawStripes(w, h, ts, bs) {
+function drawStripes(w, h, bs) {
   // rayas negras finas entre velas, como en el original
   const cs = data.candles;
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   for (const c of cs) {
-    const x = ts.timeToCoordinate(c.time);
+    const x = M.x(c.time);
     if (x === null || x < 0 || x > w) continue;
     ctx.fillRect(Math.round(x + bs / 2) - 0.5, 0, 1, h);
   }
@@ -375,28 +403,30 @@ function drawProfile(w) {
   const xr = w - pw - 2;
   const maxLen = profWidth(w);
   const half = data.heat.size / 2;
+  const groups = new Map(), add = (col, x, y, ww, hh) => { let g = groups.get(col); if (!g) groups.set(col, g = []); g.push(x, y, ww, hh); };
+  const yLim = priceBottom();
   for (const [p, L, S, tv] of act) {
-    const y1 = series.priceToCoordinate(p + half);
-    const y2 = series.priceToCoordinate(p - half);
-    if (y1 === null || y2 === null) continue;
+    const y1 = M.y(p + half);
+    const y2 = M.y(p - half);
+    if (y1 === null || y2 === null || y2 < 0 || y1 > yLim) continue;
     const len = Math.pow((L + S) / mx, 0.7) * maxLen;
     if (len < 1) continue;
     const hh = Math.max(1, y2 - y1);
-    const sum = tv ? tv.reduce((a, b) => a + b, 0) : 0;
+    let sum = 0;
+    if (tv) for (const v of tv) sum += v;
     if (sideMode || !tv || sum <= 0) {
-      ctx.fillStyle = L >= S ? 'rgba(255,159,28,0.92)' : 'rgba(46,196,255,0.92)';
-      ctx.fillRect(xr - len, y1, len, hh);
+      add(L >= S ? 'rgba(255,159,28,0.92)' : 'rgba(46,196,255,0.92)', xr - len, y1, len, hh);
     } else {
       let x = xr;
       for (let i = 0; i < ALL.length; i++) {
         if (!tv[i]) continue;
         const sl = len * tv[i] / sum;
-        ctx.fillStyle = TIER_COL[ALL[i]];
-        ctx.fillRect(x - sl, y1, sl, hh);
+        add(TIER_COL[ALL[i]], x - sl, y1, sl, hh);
         x -= sl;
       }
     }
   }
+  fillGroups(ctx, groups);
   drawCumulative(xr, maxLen);
 }
 
@@ -425,7 +455,7 @@ function drawCumulative(xr, maxLen) {
     ctx.beginPath();
     let started = false;
     for (const [p, cv] of arr) {
-      const y = series.priceToCoordinate(p);
+      const y = M.y(p);
       if (y === null) continue;
       const x = xr - (cv / top) * maxLen;
       if (!started) { ctx.moveTo(xr, y); started = true; }
@@ -480,13 +510,12 @@ function drawBook(w, h) {
 
 function drawLiqs(w, h) {
   if (!showLiq || !data.liqs || !data.liqs.items || !data.liqs.items.length) return;
-  const ts = chart.timeScale();
   let mx = 0;
   for (const it of data.liqs.items) mx = Math.max(mx, it[3]);
   if (!(mx > 0)) return;
   for (const [t, p, side, usd] of data.liqs.items) {
-    const x = ts.timeToCoordinate(t);
-    const y = series.priceToCoordinate(p);
+    const x = M.x(t);
+    const y = M.y(p);
     if (x === null || y === null || x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
     const r = 2.5 + Math.sqrt(usd / mx) * 13;
     fctx.beginPath();
@@ -502,10 +531,10 @@ function drawLiqs(w, h) {
 function paneBuckets(entries, bs, xMax, avg) {
   // velas de ≥ 3 px: una barra por vela, centrada en ella; más finas: se suman por columnas de 3 px para que se vean
   // (avg: la media de la columna, para tasas como el funding, que no se suman)
-  const ts = chart.timeScale(), out = new Map(), col = bs >= 3 ? 0 : 3;
+  const out = new Map(), col = bs >= 3 ? 0 : 3;
   const wid = col ? col - 0.6 : Math.max(1.5, bs * 0.7);
   for (const [t, up, dn] of entries) {
-    const x = ts.timeToCoordinate(t);
+    const x = M.x(t);
     if (x === null || x < 0 || x > xMax) continue;
     const left = col ? Math.floor(x / col) * col : x - wid / 2, b = out.get(left) || [0, 0, wid, 0];
     b[0] += up; b[1] += dn; b[3]++;
@@ -526,12 +555,14 @@ function drawPaneBars(buckets, y0, y1, upCol, dnCol, xMax, boost, linear) {
   vals.sort((p, q) => p - q);
   const unit = Math.max(1e-12, vals[Math.floor(vals.length / 2)] / boost);   // boost alto = lo pequeño se ve más
   const f = linear ? (v) => v : (v) => Math.log10(1 + v / unit), m = f(vals[vals.length - 1]);
+  const ups = [], dns = [];
   for (const [left, [u, d, wid]] of buckets) {
     const x = Math.max(0, left), bwid = Math.min(left + wid, xMax) - x;   // sin pisar el eje de precios
     if (bwid <= 0) continue;
-    if (u > 0) { const hgt = Math.max(1.5, f(u) / m * half); fctx.fillStyle = upCol; fctx.fillRect(x, zero - hgt, bwid, hgt); }
-    if (d > 0) { const hgt = Math.max(1.5, f(d) / m * half); fctx.fillStyle = dnCol; fctx.fillRect(x, zero + 1, bwid, hgt); }
+    if (u > 0) { const hgt = Math.max(1.5, f(u) / m * half); ups.push(x, zero - hgt, bwid, hgt); }
+    if (d > 0) { const hgt = Math.max(1.5, f(d) / m * half); dns.push(x, zero + 1, bwid, hgt); }
   }
+  fillGroups(fctx, [[upCol, ups], [dnCol, dns]]);
   return vals[vals.length - 1];
 }
 
@@ -570,9 +601,9 @@ function setCvdLive(t, perp, now) {
   cvdLiveAt = now; prepareCvd(); version++;
 }
 function visibleIdx(xMax) {
-  const ts = chart.timeScale(), cs = data.candles, out = [];
+  const cs = data.candles, out = [];
   for (let i = 0; i < cs.length; i++) {
-    const x = ts.timeToCoordinate(cs[i].time);
+    const x = M.x(cs[i].time);
     if (x !== null && x >= 0 && x <= xMax) out.push([i, x]);
   }
   return out;
@@ -784,6 +815,7 @@ function render() {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  M = mapper();
   const yMax = priceBottom();            // el mapa no invade los paneles inferiores
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, yMax); ctx.clip();
   if (cfg.map !== 'liq') drawBookMap(w, cfg.map === 'both' ? 0.8 : 1);   // libro de órdenes debajo
@@ -1075,14 +1107,34 @@ function flushToast(side) {
   setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 450); }, 6000);
 }
 
+// Datos que solo hacen falta con su capa o panel a la vista (burbujas, gasolina, CVD, muros): se piden solo entonces
+function wantParts() {
+  const on = paneList();
+  return [showLiq && 'liq', on.includes('fuel') && 'fuel', on.includes('cvd') && 'cvd', cfg.book && 'walls'].filter(Boolean);
+}
+let loadedWant = [];
+function ensureParts() { if (data && wantParts().some(x => !loadedWant.includes(x))) load(); }
+// Cada cuánto se recargan los datos: en 4h y 1D el mapa cambia despacio (el precio y las liquidaciones van aparte, en directo)
+const POLL_S = { '5m': 60, '15m': 60, '1h': 120, '4h': 300, '1d': 300 };
+let pollTimer = null, loadSeq = 0;
+
 async function load() {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(load, POLL_S[tf] * 1000);
+  const my = ++loadSeq;
   try {
+    const want = wantParts();
     const q = `tf=${tf}&model=${cfg.model}&lev=${curLevs().join(',')}` + (cfg.view === 'pro' ? '&bin=' + binParam() : '') +
-      (cfg.ex.length ? '&ex=' + cfg.ex.join(',') : '') + (cfg.map !== 'liq' ? '&book=1' : '') + (K ? '&k=' + encodeURIComponent(K) : '');
+      (cfg.ex.length ? '&ex=' + cfg.ex.join(',') : '') + (cfg.map !== 'liq' ? '&book=1' : '') + '&v=2&want=' + want.join(',') +
+      (K ? '&k=' + encodeURIComponent(K) : '');
     const r = await fetch('/api/data?' + q, { cache: 'no-store' });
     const d = await r.json();
+    if (my !== loadSeq) return;                         // llegó tarde: ya se pidió otra recarga
     if (d.error) throw new Error(d.error);
+    if (d.candles.length && Array.isArray(d.candles[0]))  // v=2: velas como listas
+      d.candles = d.candles.map(([time, open, high, low, close]) => ({ time, open, high, low, close }));
     data = d;
+    loadedWant = want;
     updateZoneRange();
     series.setData(d.candles);
     doiMap = new Map((d.doi || []).map(([t, v]) => [t, v]));
@@ -1168,7 +1220,7 @@ function buildCfg() {
     if (next.length > 3) next = next.slice(-3);        // como mucho 3: se quita el más antiguo
     cfg.paneList = next;
     if (cfg.paneList.length) cfg.panes = true;
-    saveCfg(); applyPanes(); version++; buildCfg();
+    saveCfg(); applyPanes(); version++; buildCfg(); ensureParts();
   })));
   document.getElementById('cMin').value = cfg.minPct;
   document.getElementById('cMinV').textContent = cfg.minPct;
@@ -1187,21 +1239,6 @@ bCfg.onclick = () => {
 const MODEL_LABEL = { auto: 'Auto (calibrado)', oi: 'Open Interest (tus ajustes)', vol: 'Volumen', hl: 'Hyperliquid real (posiciones de verdad)' };
 function pct(x) { return x === null || x === undefined ? '–' : Math.round(x * 100) + '%'; }
 function esc(x) { return String(x).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
-const CG_ADDS = { Professional: 'su heatmap y su mapa de liquidaciones, para compararlos con el nuestro',
-  Standard: 'órdenes de liquidación con precio de 7 días y más exchanges', Startup: 'poco: datos por vela desde 30m', Hobbyist: 'nada nuevo: datos por vela de 4h o más' };
-function cgBlock(g) {
-  // solo aparece si hay COINGLASS_API_KEY en el servidor
-  if (!g) return '';
-  let head;
-  if (!g.checked) head = '<div class="muted">Comprobando la clave…</div>';
-  else if (!g.plan) head = `<div class="warn">Tu clave no da acceso a la API${g.reason ? ': «' + esc(g.reason) + '»' : '.'}</div>
-    <div class="muted">La API de CoinGlass es de pago (desde 29 $/mes); con la cuenta gratis no da datos.</div>`;
-  else head = `<div>Plan detectado: <b>${esc(g.plan)}</b> · se podría añadir: ${CG_ADDS[g.plan] || '–'}</div>`;
-  const when = g.checked ? new Date(g.checked * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '';
-  return `<h4>CoinGlass</h4>${head}
-    <div>${(g.checks || []).map(c => `${c.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'} ${esc(c.name)}`).join(' · ')}</div>
-    ${when ? `<div class="muted">Comprobado a las ${when} · se repite cada 6 h.</div>` : ''}`;
-}
 function bookBlock(b) {
   if (!b || b.error) return b && b.error ? `<h4>Mapa de liquidez</h4><div class="bad">Error: ${esc(b.error)}</div>` : '';
   const since = b.since && b.since.book5 ? fmtLocalFull(b.since.book5) : null;
@@ -1289,7 +1326,7 @@ function renderVal(v) {
   parts.push(`<h4>Recogida de liquidaciones reales (${LIQ_EX.length} exchanges)</h4>
     <div>${LIQ_EX.map(ex => `${dot(col[ex])} ${EX_NAME[ex]}`).join(' · ')}</div>
     <div class="muted">Guardadas: ${(v.db && v.db.events) || 0} · escuchando ${String((v.db && v.db.hours_listening) || 0).replace('.', ',')} h en total</div>
-    ${hlBlock(v)}${bookBlock(v.book)}${czBlock(v.coinalyze)}${cgBlock(v.coinglass)}
+    ${hlBlock(v)}${bookBlock(v.book)}${czBlock(v.coinalyze)}
     <h4>Cómo leerlo</h4>
     <div class="muted">Acierto: % del dinero liquidado que cayó en una zona que el heatmap ya marcaba antes. Azar: lo que se acertaría con un precio cualquiera cercano. Burbuja <span class="L">naranja</span> = largos liquidados, <span class="S">cian</span> = cortos. Binance solo envía una muestra (1 por segundo).</div>`);
   valEl.innerHTML = parts.join('');
@@ -1317,9 +1354,9 @@ bVal.onclick = () => {
   loadVal();
   valTimer = setInterval(loadVal, 300000);
 };
-bLiq.onclick = () => { showLiq = !showLiq; bLiq.classList.toggle('on', showLiq); };
+bLiq.onclick = () => { showLiq = !showLiq; bLiq.classList.toggle('on', showLiq); ensureParts(); };
 bBook.classList.toggle('on', !!cfg.book);
-bBook.onclick = () => { cfg.book = !cfg.book; saveCfg(); bBook.classList.toggle('on', cfg.book); version++; };
+bBook.onclick = () => { cfg.book = !cfg.book; saveCfg(); bBook.classList.toggle('on', cfg.book); version++; ensureParts(); };
 
 document.querySelectorAll('button[data-tf]').forEach(btn => {
   btn.onclick = () => {
@@ -1340,7 +1377,7 @@ bMode.onclick = () => {
 bAsia.onclick = () => { showAsia = !showAsia; bAsia.classList.toggle('on', showAsia); if (data) updateAsia(); };
 bZones.onclick = () => { showZones = !showZones; bZones.classList.toggle('on', showZones); updateZones(); updateZoneLines(); };
 bProf.onclick = () => { showProf = !showProf; bProf.classList.toggle('on', showProf); };
-bPanes.onclick = () => { cfg.panes = !cfg.panes; saveCfg(); applyPanes(); version++; };
+bPanes.onclick = () => { cfg.panes = !cfg.panes; saveCfg(); applyPanes(); version++; ensureParts(); };
 bHl.classList.toggle('on', cfg.hl);
 bHl.onclick = () => { cfg.hl = !cfg.hl; saveCfg(); bHl.classList.toggle('on', cfg.hl); version++; };
 // apalancamientos: el modelo real de Hyperliquid tiene los suyos (por defecto todos)
@@ -1581,7 +1618,6 @@ requestAnimationFrame(render);
 load();
 pollLive();
 if (/^#manual$/i.test(location.hash || '')) bHelp.onclick();
-setInterval(load, 60000);
 setInterval(pollLive, 4000);
 setInterval(tickCountdown, 1000);
 </script>

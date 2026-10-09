@@ -44,7 +44,7 @@ EX_ALIAS = {"gateio": "gate", "gate": "gate", "huobi": "htx", "htx": "htx", "oke
 _http = requests.Session()
 _lock = threading.Lock()
 STATE = {"markets": [], "oi": [], "liq": [], "names": {}, "discovered": None, "data": {},
-         "errors": 0, "last_error": None, "calls": [], "check": None}
+         "errors": 0, "last_error": None, "calls": []}
 _started = False
 
 
@@ -231,7 +231,7 @@ def status():
     if not KEY:
         return None
     with _lock:
-        st = {k: STATE[k] for k in ("discovered", "errors", "last_error", "check")}
+        st = {k: STATE[k] for k in ("discovered", "errors", "last_error")}
         st["oi_markets"] = [m["label"] for m in STATE["oi"]]
         st["liq_markets"] = len(STATE["liq"])
         st["btc_markets"] = len(STATE["markets"])
@@ -239,11 +239,6 @@ def status():
         st["updated"] = {tf: int(v["at"]) for tf, v in STATE["data"].items()}
         st["calls_last_min"] = len([t for t in STATE["calls"] if time.time() - t < 60])
     return st
-
-
-def set_check(value):
-    with _lock:
-        STATE["check"] = value
 
 
 def _loop():

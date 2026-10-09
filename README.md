@@ -62,6 +62,9 @@ También graba el **libro de órdenes** de Binance para el mapa de liquidez. No 
   y liquidaciones por vela de los mercados que no escuchamos; también rellena las velas en las que el servidor no estuvo
   escuchando. Como mucho 34 consultas por minuto (su límite es 40). La web cita la fuente con enlace, como piden.
 
+## Pruebas
+`python3 tests/test_backend.py . /tmp/salida` (servidor) y `node tests/harness.js . /tmp/salida` (web), sin red. Más en `tests/README.md`.
+
 ## Despliegue (Railway)
 - Comando de inicio: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4`
 - Región de Europa (Binance bloquea EE. UU. con error 451).
@@ -75,7 +78,6 @@ También graba el **libro de órdenes** de Binance para el mapa de liquidez. No 
 | COINALYZE_API_KEY | clave gratis de coinalyze.net: OI con histórico de más exchanges y liquidaciones por vela | — |
 | HL_REAL · HL_RATE · HL_TOP_LEADERS | posiciones reales de Hyperliquid (0 = apagado), consultas por segundo y cuentas de la clasificación | 1 · 2.5 · 1500 |
 | TELEGRAM_TOKEN / TELEGRAM_CHAT_ID | alertas de zona cercana y barrido de Asia | — |
-| COINGLASS_API_KEY | clave de CoinGlass: se comprueba cada 6 h qué deja usar el plan (su API es de pago; el heatmap y el mapa solo con Professional) | — |
 | ALERT_TF · ALERT_DIST_PCT · ALERT_MIN_RATIO · ALERT_COOLDOWN_MIN | ajustes de las alertas | 15m · 0.4 · 0.6 · 60 |
 | ASIA_START_UTC / ASIA_END_UTC | rango asiático en hora UTC | 0 y 7 |
 | OI_SOURCES | fuentes de OI activas, separadas por comas | todas |
@@ -92,9 +94,10 @@ También graba el **libro de órdenes** de Binance para el mapa de liquidez. No 
 |---|---|
 | `/api/data?tf=5m&model=auto&lev=25,50,100&bin=0.05&ex=binance` | velas, heatmap, zonas, ΔOI, OI total, liquidaciones por vela, CVD, funding, gasolina, Hyperliquid, contexto |
 | `/api/data?...&book=1` | lo mismo + el mapa de liquidez (`book_map`: por vela, niveles 1–7 del libro en tramos) |
+| `/api/data?...&v=2&want=liq,fuel,cvd,walls` | respuesta compacta (la que usa la web): velas como listas y sin burbujas, gasolina, CVD ni muros salvo que se pidan |
 | `/api/live?after=CURSOR` | liquidaciones reales nuevas (para el directo) |
 | `/api/validate?tf=5m` | acierto del heatmap frente al azar y coincidencia con Hyperliquid |
 | `/api/calibrate` | fuerza una calibración (una cada 10 min) |
-| `/api/status` | estado de los recolectores, la base de datos, el libro de órdenes, Hyperliquid, Coinalyze y la clave de CoinGlass |
+| `/api/status` | estado de los recolectores, la base de datos, el libro de órdenes, Hyperliquid y Coinalyze |
 | `/api/test-alert` | mensaje de prueba a Telegram |
 | `/health` | ok |

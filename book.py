@@ -365,15 +365,6 @@ def book_map(candles, step, size, price, range_pct=8.0, now=None):
     return out
 
 
-def cell_value(bm, i, price):
-    """Para pruebas: nivel en la vela i y el precio dado."""
-    row = bm["rows"][i]
-    if not row:
-        return 0
-    k = int(price // bm["S"]) - bm["k0"] - row[0]
-    return int(row[1][k]) if 0 <= k < len(row[1]) else 0
-
-
 # ───────────── Grabadora (hilos) ─────────────
 _want_snap = threading.Event()
 _started = False

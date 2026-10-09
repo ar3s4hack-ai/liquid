@@ -9,7 +9,6 @@ import requests
 from flask import Flask, jsonify, request, send_from_directory
 
 import book as BK
-import cg as CG
 import cz as CZ
 import hl as HL
 import liqdata as LQ
@@ -276,7 +275,7 @@ def load_sources(tf, candles, groups=None):
         "okx_usd": lambda: fetch_oi_okx("BTC-USD-SWAP", tf),
     }
     names = [n for n in ALL_SOURCES if n in ENABLED_SOURCES and (want is None or n in want)]
-    cz_src, cz_labels = CZ.oi_sources(tf) if CZ.KEY else ({}, {})
+    cz_src = CZ.oi_sources(tf)[0] if CZ.KEY else {}
     extra = [n for n in sorted(cz_src) if n.startswith("cz") and (want is None or "otros" in (groups or ()))]
     futures = {n: _pool.submit(hist[n]) for n in names if n in hist}
     px = {c["time"]: c["close"] for c in candles}
@@ -1197,7 +1196,6 @@ LQ.start()
 if os.getenv("COLLECT", "1") != "0":
     threading.Thread(target=calib_loop, daemon=True, name="calib").start()
     threading.Thread(target=snapshot_loop, daemon=True, name="oi-snap").start()
-    CG.start()   # solo si hay COINGLASS_API_KEY: comprueba qué deja usar el plan
     BK.start()   # mapa de liquidez: libro de órdenes de Binance en el tiempo
     CZ.start()   # solo si hay COINALYZE_API_KEY
     HL.start(lambda: LQ.MARK["price"], lambda: LAST_OI.get("hyperliquid"))
@@ -1231,9 +1229,30 @@ def api_data():
         d = get_data(tf, model, levs, bin_pct, groups)
         if request.args.get("book") == "1":       # mapa de liquidez (solo si la web lo enseña)
             d = dict(d, book_map=safe_book_map(d, tf))
+        if request.args.get("v") == "2":
+            d = slim(d, set(request.args.get("want", "").split(",")))
         return jsonify(d)
     except Exception as e:
         return jsonify({"error": str(e)}), 502
+
+
+# Partes que la web solo usa si están a la vista: con v=2 solo van si se piden en want
+SLIM_PARTS = {"liq": ("liqs", "items"), "fuel": ("fuel", None), "cvd": ("cvd", None), "walls": ("book", None)}
+
+
+def slim(d, want):
+    """Respuesta compacta (v=2): velas como listas [t, apertura, máximo, mínimo, cierre] y sin burbujas, gasolina,
+    CVD ni muros del libro salvo que la web los pida (capas y paneles apagados no necesitan esos datos)."""
+    out = dict(d, candles=[[c["time"], c["open"], c["high"], c["low"], c["close"]] for c in d["candles"]])
+    for name, (key, sub) in SLIM_PARTS.items():
+        if name in want or key not in out:
+            continue
+        if sub:
+            if isinstance(out[key], dict):
+                out[key] = dict(out[key], **{sub: []})
+        else:
+            out[key] = None if key == "book" else []
+    return out
 
 
 def safe_book_map(d, tf):
@@ -1260,7 +1279,7 @@ def api_validate():
     except ValueError:
         return jsonify({"error": "lev no válido"}), 400
     try:
-        return jsonify(dict(get_validation(tf, levs), coinglass=CG.summary(), coinalyze=safe_call(CZ.status),
+        return jsonify(dict(get_validation(tf, levs), coinalyze=safe_call(CZ.status),
                             book=safe_call(BK.status)))
     except Exception as e:
         return jsonify({"error": str(e)}), 502
@@ -1289,7 +1308,7 @@ def api_status():
     except Exception as e:
         db = {"error": str(e)[:120]}
     return jsonify({"collectors": LQ.status(), "db": db, "mark": LQ.MARK, "data_dir": LQ.DATA_DIR,
-                    "coinglass": CG.summary(detail=True), "hyperliquid": safe_call(HL.status), "book": safe_call(BK.status),
+                    "hyperliquid": safe_call(HL.status), "book": safe_call(BK.status),
                     "coinalyze": safe_call(cz_status)})
 
 
