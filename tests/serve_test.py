@@ -59,8 +59,30 @@ def agg(tf_s):
     return [out[t] for t in sorted(out)]
 
 
+TREND = os.environ.get("TREND", "compra")     # señal de tendencia simulada: compra, espera o venta
+
+
+def trend_klines(iv, limit):
+    """Velas diarias / 4h para la señal de tendencia, terminando en el precio de ahora (la última, en curso)."""
+    step = app.TF_SECONDS[iv]
+    g = {"compra": 0.002, "espera": 0.002, "venta": -0.002}[TREND] * step / 86400
+    if TREND == "espera" and iv == "4h":
+        g = -0.0006                       # diario alcista, 4h bajista: 2 de 3
+    cur = int(time.time()) // step * step
+    rows, prev = [], None
+    for i in range(limit):
+        t = cur - (limit - 1 - i) * step
+        c = C[-1]["close"] * math.exp(g * (i - (limit - 1)) + 0.01 * math.sin(i / 7))
+        o = prev if prev is not None else c
+        rows.append([t * 1000, str(o), str(max(o, c) * 1.003), str(min(o, c) * 0.997), str(c), "0", (t + step) * 1000 - 1])
+        prev = c
+    return rows
+
+
 def fake_get(url, params=None, headers=None):
     p = params or {}
+    if "klines" in url and p.get("interval") in ("1d", "4h") and p.get("limit", 0) >= 500:
+        return trend_klines(p["interval"], p["limit"])
     if "klines" in url:
         cs = agg(app.TF_SECONDS[p["interval"]])[-p["limit"]:]
         return [[c["time"] * 1000, str(c["open"]), str(c["high"]), str(c["low"]), str(c["close"]), "0", "0", str(c["v"]), "0", "0",

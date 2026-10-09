@@ -993,4 +993,131 @@ out = {}
 app.estimate_heat(cs, {"binance": oi}, 100000.0, app.tiers_from([25]), "oi", out=out)
 assert round(out["fuel"][2][0]) == 100 and round(out["fuel"][3][0]) == 0 and round(out["fuel"][3][1]) == 100
 ok("MMR 0,4 % y 0,5 % en la calibración (72 combinaciones) y gasolina por vela")
+
+# ───── 16) señal de tendencia (diario + 4h): votos, etiqueta, desde cuándo, solo velas cerradas, caché y rutas
+import trend as TR  # noqa: E402
+
+
+def mk(n, step, start, f):
+    """Velas [(apertura, o, h, l, c)] con cierre f(i); la apertura es el cierre anterior."""
+    out, prev = [], f(0)
+    for i in range(n):
+        c_ = f(i)
+        out.append((start + i * step, prev, max(prev, c_) * 1.002, min(prev, c_) * 0.998, c_))
+        prev = c_
+    return out
+
+
+D0 = 1700000000 // 86400 * 86400
+H0 = D0 + 500 * 86400 - 1000 * 14400               # 1000 velas de 4h que cierran a la vez que el último día
+up_d, dn_d = mk(500, 86400, D0, lambda i: 30000 * 1.004 ** i), mk(500, 86400, D0, lambda i: 90000 * 0.996 ** i)
+up_4, dn_4 = mk(1000, 14400, H0, lambda i: 50000 * 1.0007 ** i), mk(1000, 14400, H0, lambda i: 90000 * 0.9993 ** i)
+r = TR.compute(up_d, up_4)
+assert r["label"] == "compra" and r["score"] == 3 and [v["on"] for v in r["votes"]] == [True, True, True], r
+assert r["votes"][1]["state"] == 1 and r["flip"] == r["votes"][0]["ema"] < up_d[-1][4]
+assert r["asof"] == up_4[-1][0] + 14400 == up_d[-1][0] + 86400 and r["day"] == up_d[-1][0]
+assert r["since"] is None and r["study"]["spot"]["ret"] > 0                 # mismo estado en todas las velas pedidas
+r = TR.compute(dn_d, dn_4)
+assert r["label"] == "venta" and r["score"] == 0 and not any(v["on"] for v in r["votes"]) and r["votes"][1]["state"] == -1, r
+r = TR.compute(up_d, dn_4)
+assert r["label"] == "espera" and r["score"] == 2 and [v["on"] for v in r["votes"]] == [True, True, False], r
+# la EMA100 diaria: el precio de cambio es la propia EMA (un cierre por debajo quita el voto)
+e = TR.ema([x[4] for x in up_d], 100)
+assert abs(r["flip"] - round(e[-1], 1)) < 1e-9
+nxt = e[-1] - 1
+assert not (nxt > e[-1] + 2 / 101 * (nxt - e[-1]))
+# desde cuándo: en 4h la EMA50 cruza por debajo de la EMA200 → de COMPRA a ESPERA justo en esa vela
+mix_4 = mk(1000, 14400, H0, lambda i: 50000 * 1.0007 ** i if i < 900 else 50000 * 1.0007 ** 900 * 0.996 ** (i - 900))
+f_, s_ = TR.ema([x[4] for x in mix_4], 50), TR.ema([x[4] for x in mix_4], 200)
+jx = next(j for j in range(900, 1000) if f_[j] <= s_[j])
+r = TR.compute(up_d, mix_4)
+assert r["label"] == "espera" and r["since"] == mix_4[jx][0] + 14400 and r["since_price"] == mix_4[jx][4], (r["since"], jx)
+# el día que cierra cuenta desde la vela de 4h que cierra con él (no antes: sin mirar al futuro)
+crash_d = up_d[:-1] + [(up_d[-1][0], up_d[-2][4], up_d[-2][4], up_d[-2][4] * 0.5, up_d[-2][4] * 0.5)]
+sc, _, _ = TR.series(crash_d, up_4)
+assert sc[-2][1] == 3 and sc[-1][1] in (1, 2), sc[-3:]
+assert sc[-1][0] == crash_d[-1][0] + 20 * 3600 and sc[-2][0] == crash_d[-1][0] + 16 * 3600
+r = TR.compute(crash_d, up_4)
+assert r["label"] == "espera" and not r["votes"][0]["on"] and r["since"] == r["asof"] and r["since_price"] == up_4[-1][4]
+try:
+    TR.compute(up_d[:50], up_4)
+    raise AssertionError("pocas velas")
+except ValueError:
+    pass
+# solo velas cerradas: la que está en curso (cierre en el futuro) se descarta
+nowt = int(time.time())
+gb = app.get_json
+app.get_json = lambda url, params=None, headers=None: [
+    [(nowt - 2 * 86400) * 1000, "1", "2", "0.5", "1.5", "0", (nowt - 86400) * 1000 - 1],
+    [(nowt - 86400) * 1000, "1.5", "3", "1", "2", "0", (nowt + 600) * 1000]]
+assert app.fetch_closed("1d", 2) == [((nowt - 2 * 86400), 1.0, 2.0, 0.5, 1.5)]
+app.get_json = gb
+# caché de 5 min y sin esperar si otro hilo ya está pidiendo
+TR._state.update(t=0.0, v=None, err=None)
+asked = []
+
+
+def fk(iv, lim):
+    asked.append((iv, lim))
+    return up_d if iv == "1d" else up_4
+
+
+v1_ = TR.get(fk)
+assert TR.get(fk) is v1_ and asked == [("1d", TR.N_DAILY), ("4h", TR.N_H4)]
+TR._state["t"] -= TR.TTL + 1
+assert TR._fetch_lock.acquire(blocking=False)
+assert TR.get(fk) is v1_ and len(asked) == 2                 # otro hilo pidiendo: se sirve lo que hay
+TR._fetch_lock.release()
+
+
+def broken(iv, lim):
+    raise RuntimeError("binance caído")
+
+
+assert TR.get(broken) is v1_ and TR.status()["error"] == "binance caído"   # falla: se mantiene el último cálculo
+TR._state.update(t=0.0, v=None, err=None)
+try:
+    TR.get(broken)
+    raise AssertionError("sin caché debe fallar")
+except RuntimeError:
+    pass
+
+
+# rutas: /api/data (también la compacta) y /api/status
+def kl(rows, step):
+    return [[t_ * 1000, str(o_), str(h_), str(l_), str(c_), "0", (t_ + step) * 1000 - 1, "0", "0", "0", "0"]
+            for t_, o_, h_, l_, c_ in rows]
+
+
+def trend_get(url, params=None, headers=None):
+    iv = (params or {}).get("interval")
+    if "klines" in url and iv == "1d":
+        return kl(up_d, 86400)
+    if "klines" in url and iv == "4h":
+        return kl(mix_4, 14400)
+    return fake_get(url, params, headers)
+
+
+TR._state.update(t=0.0, v=None, err=None)
+app._cache.clear()
+app._candle_cache.clear()
+app.get_json = trend_get
+dt_ = cl.get("/api/data?tf=5m&v=2&want=").get_json()
+stt = cl.get("/api/status").get_json()["trend"]
+app.get_json = fake_get
+assert "error" not in dt_, dt_.get("error")
+tr_ = dt_["trend"]
+assert tr_["label"] == "espera" and tr_["score"] == 2 and tr_["since"] == mix_4[jx][0] + 14400 and len(tr_["votes"]) == 3, tr_
+assert stt["label"] == "espera" and stt["score"] == 2 and stt["error"] is None and stt["age_s"] is not None
+TR._state.update(t=0.0, v=None, err=None)
+app._cache.clear()
+app.get_json = lambda url, params=None, headers=None: (_ for _ in ()).throw(RuntimeError("sin red")) \
+    if (params or {}).get("interval") in ("1d", "4h") else fake_get(url, params, headers)
+de_ = cl.get("/api/data?tf=5m&v=2&want=").get_json()
+app.get_json = fake_get
+assert "error" not in de_ and de_["trend"] == {"error": "sin red"}, de_.get("trend")   # sin tendencia, el resto sigue
+app._cache.clear()
+json.dump(dict(tr_), open(os.path.join(OUT, "trend.json"), "w"))
+ok(f"tendencia: COMPRA/ESPERA/VENTA con 3 votos, cambio de EMA100 en {r['flip']:,.0f}, desde cuándo, solo velas cerradas, "
+   "sin mirar al futuro, caché de 5 min y rutas")
 print("TODO EL SERVIDOR OK")

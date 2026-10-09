@@ -588,7 +588,7 @@ function makeEnv(opts) {
   if (!/OI con histórico: Hyperliquid BTC · Gate BTC_USDT/.test(vcz) || !/de 14 mercados/.test(vcz) || !/Último error: &lt;b&gt;401&lt;\/b&gt;/.test(vcz) || !/href="https:\/\/coinalyze\.net"/.test(vcz)) throw new Error('bloque Coinalyze: ' + vcz);
   delete VAL.hl; delete VAL.hl_compare; delete VAL.models.hl; delete VAL.coinalyze;
   ok('validez: 8 exchanges, MMR de la calibración, estado del libro, Hyperliquid real (posiciones, cobertura y coincidencia con el estimado) y Coinalyze (o cómo conseguir la clave)');
-  // ── manual: botón, 11 apartados, todo lo que se puede elegir explicado y con los mismos colores que el gráfico
+  // ── manual: botón, 12 apartados, todo lo que se puede elegir explicado y con los mismos colores que el gráfico
   {
     if (env.get('help').style.display === 'block') throw new Error('el manual empieza cerrado');
     env.get('bCfg').onclick();                                   // con ⚙ abierto: al abrir el manual se cierra
@@ -598,7 +598,7 @@ function makeEnv(opts) {
   }
   const hm = env.get('help').innerHTML;
   const secs = (hm.match(/<summary>[^<]+<\/summary>/g) || []).map(x => x.replace(/<\/?summary>/g, ''));
-  if (secs.join('|') !== 'Lo básico|Mapa de liquidaciones|Perfil, sesgo e imán|Liquidaciones reales|Hyperliquid real|Mapa de liquidez (libro)|Paneles de abajo|Barra de arriba|⚙ Ajustes y capas|✓ Validez|Palabras clave')
+  if (secs.join('|') !== 'Lo básico|Mapa de liquidaciones|Perfil, sesgo e imán|Señal de tendencia|Liquidaciones reales|Hyperliquid real|Mapa de liquidez (libro)|Paneles de abajo|Barra de arriba|⚙ Ajustes y capas|✓ Validez|Palabras clave')
     throw new Error('apartados: ' + secs);
   const items = (hm.match(/<div class="it">/g) || []).length;
   const must = [...Object.values(env.js('PANE_NAME')).map(x => `<b>${x}</b>`),
@@ -606,7 +606,8 @@ function makeEnv(opts) {
     ...env.js('Object.values(MODEL_NAME)').map(x => x.replace(' (calibrado)', '') + ':'),
     'Liquidaciones, Liquidez (libro) o Las dos', 'Pro: 4 colores', 'Completa: todos', '<b>Grupo</b>', '<b>Imán</b>', '<b>Intensidad</b>', '«Total ≥»', 'maxHeat',
     '<b>Burbujas (capa «Liq»)</b>', '<b>Pulso</b>', '<b>Aviso ⚡</b>', '<b>Velas</b>', '<b>Perfil</b>', '<b>Curvas</b>', '<b>Acierto</b>', '<b>Azar</b>', '<b>Puntos (pts)</b>',
-    'no es una recomendación ni una señal de entrada'];
+    'no es una recomendación ni una señal de entrada',
+    '<b>COMPRA · ESPERA · VENTA</b>', '<b>Los 3 votos</b>', '<b>Cómo se usa</b>', 'no es para abrir cortos', '<b>EMA</b>', '<b>EWO (Elliott)</b>'];
   const miss = must.filter(t => !hm.includes(t));
   if (miss.length) throw new Error('el manual no explica: ' + miss.join(' | '));
   // los colores de los dibujos son los del gráfico
@@ -615,7 +616,7 @@ function makeEnv(opts) {
     'rgba(46,196,255,0.55)', 'rgba(255,159,28,0.55)', '#ff5a5a', '#3ddc84', ...env.js('BOOK_PAL.slice(1).map(c => `rgba(${c.join(",")})`)')];
   const missC = COLS.filter(c => !hm.includes(c));
   if (missC.length) throw new Error('colores del manual distintos del gráfico: ' + missC);
-  if (!/^#[0-9a-fA-F]{6}$/.test(String(hm.match(/--c:([^"]+)"/)[1])) || new Set((hm.match(/--c:[^"]+"/g) || [])).size !== 11) throw new Error('un color por apartado');
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(hm.match(/--c:([^"]+)"/)[1])) || new Set((hm.match(/--c:[^"]+"/g) || [])).size !== 12) throw new Error('un color por apartado');
   // horas de la sesión asiática en la hora de quien mira
   const asia = env.js('data.asia'), hhm = (t) => new Date(t * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
   if (env.get('helpAsia').textContent !== `de ${hhm(asia.start)} a ${hhm(asia.end)}, tu hora`) throw new Error('horas de Asia: ' + env.get('helpAsia').textContent);
@@ -626,7 +627,76 @@ function makeEnv(opts) {
   env.get('bHelp').onclick(); env.get('bVal').onclick(); await settle();
   if (env.get('help').style.display !== 'none' || env.get('val').style.display !== 'block') throw new Error('✓ Validez cierra el manual');
   env.js('closeVal()');
-  ok(`manual: 11 apartados y ${items} explicaciones (todos los paneles, capas, modelos y botones), colores iguales al gráfico y horas de Asia en tu hora («${env.get('helpAsia').textContent}»)`);
+  ok(`manual: 12 apartados y ${items} explicaciones (todos los paneles, capas, modelos y botones), colores iguales al gráfico y horas de Asia en tu hora («${env.get('helpAsia').textContent}»)`);
+  // ── señal de tendencia: chip pequeño (COMPRA / ESPERA / VENTA), detalle al tocarlo y nada dibujado en el gráfico
+  {
+    const T = load('trend.json');                        // lo que devolvió el servidor en sus pruebas: ESPERA 2 de 3
+    const series0 = env.allSeries.length, titles0 = env.calls.titles.length, texts0 = env.calls.texts.length;
+    const withT = (t) => Object.assign({}, P, { trend: t });
+    const sigH = () => env.get('sig').innerHTML;
+    current = withT(T); await env.js('load()'); await settle();
+    if (!/class="sig espera"/.test(sigH()) || !sigH().includes('● ESPERA <small>2/3</small>')) throw new Error('chip ESPERA: ' + sigH());
+    env.get('sig').kids = ['marca'];                      // misma etiqueta: el botón no se rehace (un toque a medias no se pierde)
+    env.js('updateSig()');
+    if (env.get('sig').kids[0] !== 'marca') throw new Error('el chip se rehace sin cambiar');
+    env.get('bCfg').onclick();
+    env.get('sig').onclick();
+    if (env.get('sigp').style.display !== 'block' || env.get('cfg').style.display !== 'none') throw new Error('abrir el detalle cierra ⚙');
+    let sp = env.get('sigp').innerHTML;
+    const must = ['Tendencia de fondo · BTC', '● ESPERA · 2 de 3', '<span class="ok">✓</span> Cierre diario sobre la EMA100',
+      '<span class="ok">✓</span> Elliott (EWO 5/35 diario): impulso alcista', '<span class="bad">✗</span> 4h: EMA50 bajo la EMA200 (−',
+      'Desde el ', 'Pierde el voto de la EMA100 si el día cierra bajo <b>', '<b>no abrir cortos</b>', '(−37 %)', 'Spot desde 2018',
+      'Futuros desde 2020 *', 'Peor caída (spot)', '<td>−49 %</td><td>−81 %</td>', '<td>2022</td><td>−1 %</td><td>−65 %</td>',
+      'Acierta 4 de cada 10', 'el <b>57 %</b> de las veces', 'un día cualquiera: 53 %', 'No es una recomendación de inversión'];
+    const miss = must.filter(x => !sp.includes(x));
+    if (miss.length || !/\+1\.?963 %/.test(sp)) throw new Error('detalle de la señal sin: ' + miss.join(' | ') + '\n' + sp);
+    env.get('sClose').onclick();
+    if (env.get('sigp').style.display !== 'none') throw new Error('cerrar con ✕');
+    env.get('sig').onclick(); env.get('sig').onclick();
+    if (env.get('sigp').style.display !== 'none') throw new Error('el chip abre y cierra');
+    env.get('sig').onclick(); env.get('bHelp').onclick();
+    if (env.get('sigp').style.display !== 'none' || env.get('help').style.display !== 'block') throw new Error('el manual cierra el detalle');
+    env.js('closeHelp()');
+    env.get('sig').onclick(); env.get('bVal').onclick(); await settle();
+    if (env.get('sigp').style.display !== 'none' || env.get('val').style.display !== 'block') throw new Error('✓ Validez cierra el detalle');
+    const vh = env.get('val').innerHTML;
+    for (const x of ['Señal de tendencia (chip de arriba a la izquierda)', 'Probado y descartado', 'barrido del rango asiático', 'EQH/EQL', 'Cortos: 40 de 41'])
+      if (!vh.includes(x)) throw new Error('✓ Validez no explica: ' + x);
+    env.js('closeVal()');
+    // COMPRA y VENTA
+    const T3 = JSON.parse(JSON.stringify(T));
+    Object.assign(T3, { label: 'compra', score: 3 }); T3.votes.forEach(v => { v.on = true; }); T3.votes[1].state = 1;
+    current = withT(T3); await env.js('load()'); await settle();
+    if (!/class="sig compra"/.test(sigH()) || !sigH().includes('▲ COMPRA <small>3/3</small>')) throw new Error('chip COMPRA: ' + sigH());
+    const T0 = JSON.parse(JSON.stringify(T));
+    Object.assign(T0, { label: 'venta', score: 0, since: null, since_price: null }); T0.votes.forEach(v => { v.on = false; }); T0.votes[1].state = -1;
+    current = withT(T0); await env.js('load()'); await settle();
+    if (!/class="sig venta"/.test(sigH()) || !sigH().includes('▼ VENTA <small>0/3</small>')) throw new Error('chip VENTA: ' + sigH());
+    env.get('sig').onclick();
+    sp = env.get('sigp').innerHTML;
+    for (const x of ['▼ VENTA · 0 de 3', 'Recupera el voto de la EMA100 si el día cierra sobre', 'Así desde hace más de 5 meses', 'impulso bajista',
+      '<span class="bad">✗</span> Cierre diario bajo la EMA100'])
+      if (!sp.includes(x)) throw new Error('detalle VENTA sin: ' + x);
+    current = withT(T3); await env.js('load()'); await settle();          // abierto: se actualiza con los datos nuevos
+    if (!env.get('sigp').innerHTML.includes('▲ COMPRA · 3 de 3')) throw new Error('el detalle abierto no se actualiza');
+    env.js('closeSig()');
+    // con solo el mapa del libro (sin sesgo ni imán) el chip sigue; sin datos o con error, no hay chip
+    env.js("cfg.map = 'book'"); env.js('updateBias()');
+    if (env.get('bias').innerHTML !== '' || !/sig compra/.test(sigH())) throw new Error('el chip no depende del mapa');
+    env.js("cfg.map = 'liq'"); env.js('updateBias()');
+    current = withT({ error: 'sin red' }); await env.js('load()'); await settle();
+    if (sigH() !== '') throw new Error('con error no hay chip');
+    const noT = Object.assign({}, P); delete noT.trend;
+    current = noT; await env.js('load()'); await settle();
+    if (sigH() !== '') throw new Error('sin tendencia no hay chip');
+    // nada dibujado en el gráfico: ni series nuevas, ni líneas de precio, ni textos en el lienzo
+    const newTitles = env.calls.titles.slice(titles0).filter(x => /EMA|COMPRA|ESPERA|VENTA|tendencia|EWO/i.test(String(x)));
+    const newTexts = env.calls.texts.slice(texts0).filter(x => /EMA|COMPRA|ESPERA|VENTA|EWO/i.test(String(x)));
+    if (env.allSeries.length !== series0 || newTitles.length || newTexts.length) throw new Error('la señal no debe dibujarse: ' + [newTitles, newTexts]);
+    current = P; await env.js('load()'); await settle();
+  }
+  ok('señal de tendencia: chip ESPERA/COMPRA/VENTA, detalle con 3 votos, cambio de EMA100, estudio y aviso de no abrir cortos; ' +
+    'cierra y lo cierran los otros paneles; ✓ Validez con lo descartado; nada dibujado en el gráfico');
   current = { error: 'fallo simulado' }; await env.js('load()'); await settle();
   if (!/Error: fallo simulado/.test(env.get('st').innerHTML)) throw new Error('error no mostrado');
   ok('panel de validez y errores visibles');

@@ -2,7 +2,8 @@
 
 Mapa de liquidaciones **estimado** de BTCUSDT (Binance Futuros, perpetuo) con velas en tiempo real,
 comprobado contra liquidaciones **reales** de 8 exchanges y contra las posiciones **reales** de Hyperliquid.
-También graba el **libro de órdenes** de Binance para el mapa de liquidez. No es una señal de entrada.
+También graba el **libro de órdenes** de Binance para el mapa de liquidez. El mapa no es una señal de entrada; la única
+señal es el chip de tendencia de fondo (COMPRA · ESPERA · VENTA), probado con datos desde 2018.
 
 ## Qué se ve
 - **? Manual** (arriba, junto a ⚙): explica cada cosa en sencillo, por apartados plegables y con los mismos colores
@@ -26,6 +27,13 @@ También graba el **libro de órdenes** de Binance para el mapa de liquidez. No 
   - **Funding** de Binance por periodo (▲ pagan los largos, ▼ pagan los cortos) y el previsto ahora.
   - **Gasolina**: liquidaciones estimadas que siguen pendientes al cierre de cada vela (▲ cortos, ▼ largos).
     Con el modelo «Hyperliquid real», las posiciones reales de Hyperliquid por liquidar desde que se graban.
+- **Señal de tendencia** (chip arriba a la izquierda; no se dibuja nada en el gráfico): 3 votos con velas cerradas de
+  Binance Futuros: cierre diario sobre la EMA100, Elliott (EWO 5/35 diario en impulso alcista, con bandas de ruptura) y
+  EMA50 sobre EMA200 en 4h. **COMPRA** = 3 de 3; **ESPERA** = 1 o 2; **VENTA** = 0 (vender o no comprar; abrir cortos con
+  ella perdió dinero). Al tocarlo: los votos, desde cuándo, a qué cierre diario cambia y el estudio. BTC 2018-2026 con
+  comisiones: +1.963 % frente a +496 % de aguantar y peor caída −49 % frente a −81 %; acierta 4 de cada 10 operaciones
+  y en años muy alcistas gana menos que aguantar. SMC/ICT, rango asiático, ondas de Elliott, Bollinger, votos de
+  indicadores de 5m y EQH/EQL no superaron la prueba. Todo en `research/` (scripts y resultados).
 - **Sesgo**: reparto de la liquidez cerca del precio (±2 % en 5m … ±20 % en 1D) y el «imán»: la zona más fuerte dentro de ese margen.
 - **En directo**: precio y vela de Binance por WebSocket; liquidaciones reales de los 8 exchanges cada 4 s,
   con pulso en el gráfico (≥ 50K $) y aviso ⚡ cuando suman ≥ 250K $ en 2,5 s.
@@ -35,7 +43,8 @@ También graba el **libro de órdenes** de Binance para el mapa de liquidez. No 
   salen finísimas, lo normal es dejarlo vacío = automático) e intensidad. En el modelo real, los pools filtran sus posiciones.
 - **⚙ Capas**: Perfil, Paneles, Calor/Lado, Zonas, Asia, Liq (burbujas), Libro (muros del libro), HL; qué mapa y qué paneles van abajo.
 - **✓ Validez**: acierto del heatmap frente al azar, calibración, fuentes, **cuánto coincide el mapa estimado con las
-  posiciones reales de Hyperliquid** (frente al azar), estado de la grabación del libro, funding y ratio largos/cortos.
+  posiciones reales de Hyperliquid** (frente al azar), estado de la grabación del libro, funding, ratio largos/cortos y
+  qué estrategias se probaron para la señal de tendencia.
 
 ## Cómo se estima
 - OI sube en una vela: entran largos y cortos por la misma cantidad al precio típico (máx + mín + cierre) / 3,
@@ -64,6 +73,7 @@ También graba el **libro de órdenes** de Binance para el mapa de liquidez. No 
 
 ## Pruebas
 `python3 tests/test_backend.py . /tmp/salida` (servidor) y `node tests/harness.js . /tmp/salida` (web), sin red. Más en `tests/README.md`.
+El estudio de la señal de tendencia se repite con los scripts de `research/` (ver `research/README.md`).
 
 ## Despliegue (Railway)
 - Comando de inicio: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4`
@@ -92,12 +102,12 @@ También graba el **libro de órdenes** de Binance para el mapa de liquidez. No 
 ## Rutas
 | Ruta | Qué devuelve |
 |---|---|
-| `/api/data?tf=5m&model=auto&lev=25,50,100&bin=0.05&ex=binance` | velas, heatmap, zonas, ΔOI, OI total, liquidaciones por vela, CVD, funding, gasolina, Hyperliquid, contexto |
+| `/api/data?tf=5m&model=auto&lev=25,50,100&bin=0.05&ex=binance` | velas, heatmap, zonas, ΔOI, OI total, liquidaciones por vela, CVD, funding, gasolina, Hyperliquid, contexto y `trend` (señal de tendencia: etiqueta, votos, cambio de la EMA100, desde cuándo y el estudio) |
 | `/api/data?...&book=1` | lo mismo + el mapa de liquidez (`book_map`: por vela, niveles 1–7 del libro en tramos) |
 | `/api/data?...&v=2&want=liq,fuel,cvd,walls` | respuesta compacta (la que usa la web): velas como listas y sin burbujas, gasolina, CVD ni muros salvo que se pidan |
 | `/api/live?after=CURSOR` | liquidaciones reales nuevas (para el directo) |
 | `/api/validate?tf=5m` | acierto del heatmap frente al azar y coincidencia con Hyperliquid |
 | `/api/calibrate` | fuerza una calibración (una cada 10 min) |
-| `/api/status` | estado de los recolectores, la base de datos, el libro de órdenes, Hyperliquid y Coinalyze |
+| `/api/status` | estado de los recolectores, la base de datos, el libro de órdenes, Hyperliquid, Coinalyze y la señal de tendencia |
 | `/api/test-alert` | mensaje de prueba a Telegram |
 | `/health` | ok |

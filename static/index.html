@@ -35,7 +35,25 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 #val .muted{color:#7f8aa3;font-size:11px}
 #info{position:absolute;left:10px;top:8px;z-index:6;max-width:calc(100% - 110px);pointer-events:none;text-shadow:0 0 3px #000}
 #hdr{font-size:12px;color:#c9c9c9;letter-spacing:.2px}
-#bias{margin-top:5px;display:flex;flex-wrap:wrap;gap:6px;font-size:12px;pointer-events:auto}
+#brow{margin-top:5px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+#bias{display:flex;flex-wrap:wrap;gap:6px;font-size:12px;pointer-events:auto}
+#sig{pointer-events:auto}#sig:empty{display:none}
+#sig .sig{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:5px;font-size:12px;font-weight:700;letter-spacing:.3px;background:rgba(11,14,20,.85);border:1px solid #2b3550;line-height:1.5}
+#sig .sig small{font-weight:500;color:#9aa4b8;font-size:11px}
+#sig .compra{color:#26a69a;border-color:#26a69a}
+#sig .espera{color:#FFD60A;border-color:#8a7a1a}
+#sig .venta{color:#ef5350;border-color:#ef5350}
+#sigp{position:absolute;left:8px;top:6px;z-index:8;background:rgba(11,14,20,.97);border:1px solid #2b3550;border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.45;display:none;width:320px;max-width:calc(100% - 16px);max-height:calc(100% - 12px);overflow-y:auto;box-sizing:border-box}
+#sigp .hh{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#sigp .x{padding:2px 10px}
+#sigp h4{margin:9px 0 3px;font-size:12px;color:#aab3c5;font-weight:600}
+#sigp .v{padding:3px 0;border-top:1px solid rgba(43,53,80,.7)}
+#sigp table{width:100%;border-collapse:collapse;font-size:12px}
+#sigp td,#sigp th{padding:2px 4px;text-align:right;font-weight:400}
+#sigp th{color:#8b95ab;font-size:11px}
+#sigp td:first-child,#sigp th:first-child{text-align:left;color:#aab3c5}
+#sigp .ok{color:#26a69a}#sigp .bad{color:#ef5350}#sigp .warn{color:#FFD60A}#sigp .muted{color:#8b95ab;font-size:11.5px}
+#sigp .compra{color:#26a69a}#sigp .espera{color:#FFD60A}#sigp .venta{color:#ef5350}
 #bias .b{display:inline-flex;align-items:center;gap:5px;padding:2px 7px;border-radius:5px;background:rgba(11,14,20,.8);border:1px solid #2b3550}
 #bias .mini{display:inline-block;width:56px;height:6px;border-radius:3px;background:#ff9f1c;overflow:hidden}
 #bias .mini i{display:block;height:100%;background:#2ec4ff}
@@ -70,7 +88,7 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
 .L{color:#ff9f1c}.S{color:#2ec4ff}.src{color:#7fb0ff}.err{color:#ef5350}.rt{color:#26a69a}
 #st a{color:#7fb0ff;text-decoration:none}
 .price-live{color:#26a69a;font-weight:700}.price-offline{color:#ef5350;font-weight:700}
-@media (max-width:600px){#hdr{font-size:10.5px}#bias{font-size:11px}#bias .mini{width:40px}#zones{font-size:11px}#pools{font-size:11px}button{padding:5px 8px;font-size:13px}}
+@media (max-width:600px){#hdr{font-size:10.5px}#bias{font-size:11px}#sig .sig{font-size:11px}#bias .mini{width:40px}#zones{font-size:11px}#pools{font-size:11px}button{padding:5px 8px;font-size:13px}}
 </style>
 </head>
 <body>
@@ -105,7 +123,8 @@ button.tg.on{background:#7B2CBF;border-color:#7B2CBF}
   <canvas id="heat"></canvas><div id="chart"></div><canvas id="fx"></canvas>
   <div id="val"></div>
   <div id="help"></div>
-  <div id="info"><div id="hdr"></div><div id="bias"></div><div id="zones"></div></div><div id="toasts"></div>
+  <div id="sigp"></div>
+  <div id="info"><div id="hdr"></div><div id="brow"><span id="sig"></span><div id="bias"></div></div><div id="zones"></div></div><div id="toasts"></div>
   <div id="cfg">
     <div class="row"><div class="lbl">Mapa</div><div id="cMap"></div></div>
     <div class="row"><div class="lbl">Vista</div><div id="cView"></div></div>
@@ -925,6 +944,70 @@ function updateBias() {
   }
   biasEl.innerHTML = html;
 }
+
+// ───── señal de tendencia de fondo (diario + 4h): un chip pequeño; no se dibuja nada en el gráfico
+const sigEl = document.getElementById('sig');
+const sigP = document.getElementById('sigp');
+const SIG_TXT = { compra: '▲ COMPRA', espera: '● ESPERA', venta: '▼ VENTA' };
+function pc(x, d = 0) {
+  const a = Math.abs(x * 100);
+  return (x >= 0 ? '+' : '−') + (d ? a.toFixed(d).replace('.', ',') : Math.round(a).toLocaleString('es-ES')) + ' %';
+}
+function updateSig() {
+  const t = data && data.trend;
+  if (!t || t.error || !t.label) { sigEl.innerHTML = ''; sigEl.dataset.k = ''; return; }
+  const k = t.label + t.score;
+  if (sigEl.dataset.k !== k) {      // solo se rehace si cambia: así un toque a medias no se pierde
+    sigEl.dataset.k = k;
+    sigEl.innerHTML = `<button class="sig ${t.label}" title="Tendencia de fondo (diario + 4h). Toca para ver el detalle.">` +
+      `${SIG_TXT[t.label]} <small>${t.score}/3</small></button>`;
+  }
+  if (sigP.style.display === 'block') renderSig();
+}
+function renderSig() {
+  const t = data && data.trend;
+  if (!t || !t.label) { sigP.innerHTML = '<div class="muted">Sin datos de tendencia ahora mismo.</div>'; return; }
+  const px = livePrice ?? data.price, [a, b, c] = t.votes, S = t.study, sp = S.spot, fu = S.fut, p7 = S.p7;
+  const ok = (on) => on ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>';
+  const ewo = b.state === 1 ? 'impulso alcista' : b.state === -1 ? 'impulso bajista' : 'sin impulso';
+  const day = (s) => new Date(s * 1000).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+  const since = t.since ? `Desde el ${day(t.since)} a ${fmt(t.since_price)} · ahora ${pc(px / t.since_price - 1, 1)}`
+    : 'Así desde hace más de 5 meses';
+  const flip = `${a.on ? 'Pierde' : 'Recupera'} el voto de la EMA100 si el día cierra ${a.on ? 'bajo' : 'sobre'} <b>${fmt(t.flip)}</b> (${pc(t.flip / px - 1, 1)}).`;
+  const row = (k, s, h) => `<tr><td>${k}</td><td>${s}</td><td>${h}</td></tr>`;
+  sigP.innerHTML = `<div class="hh"><b>Tendencia de fondo · BTC</b><button class="x" id="sClose" title="Cerrar">✕</button></div>
+    <div class="${t.label}" style="font-size:15px;font-weight:700;margin:4px 0">${SIG_TXT[t.label]} · ${t.score} de 3</div>
+    <div class="v">${ok(a.on)} Cierre diario ${a.on ? 'sobre' : 'bajo'} la EMA100 (${fmt(a.ema)})</div>
+    <div class="v">${ok(b.on)} Elliott (EWO 5/35 diario): ${ewo}</div>
+    <div class="v">${ok(c.on)} 4h: EMA50 ${c.on ? 'sobre' : 'bajo'} la EMA200 (${pc(c.fast / c.slow - 1, 1)})</div>
+    <div class="v">${since}<br>${flip}</div>
+    <h4>Qué significa</h4>
+    <div><span class="compra">COMPRA</span> (3 de 3): estar comprado. <span class="espera">ESPERA</span> (1-2) y <span class="venta">VENTA</span> (0): fuera.
+      VENTA es vender o no comprar, <b>no abrir cortos</b>: en corto con esta señal se perdió (${pc(fu.shorts)}).</div>
+    <h4>Estudio ${sp.from.slice(0, 4)}-${S.updated.slice(0, 4)} · con comisiones</h4>
+    <table><tr><th></th><th>Señal</th><th>Aguantar</th></tr>
+      ${row('Spot desde ' + sp.from.slice(0, 4), pc(sp.ret), pc(sp.hold))}
+      ${row('Futuros desde ' + fu.from.slice(0, 4) + ' *', pc(fu.ret), pc(fu.hold))}
+      ${row('Peor caída (spot)', pc(sp.dd), pc(sp.hold_dd))}
+      <tr><th colspan="3" style="padding-top:5px">Algunos años (spot)</th></tr>
+      ${Object.entries(S.years).map(([k, v]) => row(k, pc(v[0]), pc(v[1]))).join('')}</table>
+    <div class="muted">* Con el funding real; aguantar en futuros también lo paga.</div>
+    <div style="margin-top:6px">Acierta ${Math.round(sp.win * 10)} de cada 10 operaciones: las malas se cortan pronto (${pc(sp.avg_loss)} de media, ~${sp.days_loss} días)
+      y las buenas duran (${pc(sp.avg_win)} de media, ~${sp.days_win} días). Pasa fuera el ${Math.round((1 - sp.expo) * 100)} % del tiempo.</div>
+    <div style="margin-top:4px">Con COMPRA, BTC estaba más alto 7 días después el <b>${Math.round(p7.compra * 100)} %</b> de las veces
+      (un día cualquiera: ${Math.round(p7.base * 100)} %). No adivina el día a día: su fuerza es esquivar las caídas largas.</div>
+    <div class="muted" style="margin-top:6px">Es la tendencia de fondo: vale en cualquier temporalidad, pero no da entradas exactas en 5m o 15m.
+      Estudio con datos hasta el ${S.updated.split('-').reverse().join('/')}. No es una recomendación de inversión.</div>`;
+  document.getElementById('sClose').onclick = closeSig;
+}
+function closeSig() { sigP.style.display = 'none'; }
+function toggleSig() {
+  if (sigP.style.display === 'block') { closeSig(); return; }
+  cfgEl.style.display = 'none'; closeVal(); closeHelp();
+  renderSig();
+  sigP.style.display = 'block';
+}
+sigEl.onclick = toggleSig;          // el chip es lo único que hay dentro
 function updateZoneRange() {
   // zonas fuertes cercanas que el encuadre automático debe enseñar aunque las velas no lleguen
   zoneRange = null;
@@ -1161,7 +1244,7 @@ async function load() {
     version++;
     lastKnownPrice = d.price;
     if (d.heat && d.heat.active) d.profAct = smoothActive(d.heat.active, d.heat.size);
-    updateAsia(); updateZones(); updateZoneLines(); updateStatus(); updateHeader(); updateBias(); buildCfg(); syncPools();
+    updateAsia(); updateZones(); updateZoneLines(); updateStatus(); updateHeader(); updateBias(); updateSig(); buildCfg(); syncPools();
     if (valEl.style.display === 'block' && first === false && valEl.dataset.tf !== tf) { valEl.dataset.tf = tf; loadVal(); }
     // reconectar el WebSocket si se cayó o cambió el símbolo
     if (!ws || ws.readyState > 1) connectBinance();   // solo si está cerrado o cerrándose
@@ -1232,7 +1315,7 @@ document.getElementById('cMin').oninput = (e) => {
 bCfg.onclick = () => {
   const open = cfgEl.style.display !== 'block';
   cfgEl.style.display = open ? 'block' : 'none';
-  if (open) { closeVal(); closeHelp(); }
+  if (open) { closeVal(); closeHelp(); closeSig(); }
 };
 
 // ───── validez: comparación con liquidaciones reales
@@ -1326,10 +1409,26 @@ function renderVal(v) {
   parts.push(`<h4>Recogida de liquidaciones reales (${LIQ_EX.length} exchanges)</h4>
     <div>${LIQ_EX.map(ex => `${dot(col[ex])} ${EX_NAME[ex]}`).join(' · ')}</div>
     <div class="muted">Guardadas: ${(v.db && v.db.events) || 0} · escuchando ${String((v.db && v.db.hours_listening) || 0).replace('.', ',')} h en total</div>
-    ${hlBlock(v)}${bookBlock(v.book)}${czBlock(v.coinalyze)}
+    ${hlBlock(v)}${bookBlock(v.book)}${czBlock(v.coinalyze)}${sigBlock()}
     <h4>Cómo leerlo</h4>
     <div class="muted">Acierto: % del dinero liquidado que cayó en una zona que el heatmap ya marcaba antes. Azar: lo que se acertaría con un precio cualquiera cercano. Burbuja <span class="L">naranja</span> = largos liquidados, <span class="S">cian</span> = cortos. Binance solo envía una muestra (1 por segundo).</div>`);
   valEl.innerHTML = parts.join('');
+}
+// Señal de tendencia: qué se probó (estudio de research/, BTCUSDT con comisiones y funding)
+function sigBlock() {
+  return `<h4>Señal de tendencia (chip de arriba a la izquierda)</h4>
+    <div>Pasaron la prueba (BTC 2018-2026, con comisiones, dentro y fuera de muestra y contra el azar): <b>EMA100 diaria</b>,
+      <b>Elliott EWO 5/35 con bandas</b> (diario) y <b>EMA50/200 en 4h</b>. Juntas (3 de 3) fallan menos que cada una sola.</div>
+    <div class="muted" style="margin-top:3px">Probado y descartado (no ganan tras comisiones):<br>
+      · SMC/ICT: barrido del rango asiático (gana 3 de cada 10 a 2:1 y pierde de 0,5 a 1 R por operación), del máximo/mínimo
+      del día anterior, CHoCH, FVG y order blocks. Antes de comisiones ≈ 0: no hay ventaja que pagar.<br>
+      · Ondas de Elliott por zigzag (entrada en la onda 3): no aguanta en 2024-2026.<br>
+      · Bollinger, precio vs EMA200 y cruces en 15m y 1h: las comisiones se lo comen.<br>
+      · Lectura por votos de 5m (RSI, medias, MACD, VWAP, compras a mercado): con 4 o más alcistas, BTC subió en la hora
+      siguiente el 46-47 % de las veces (normal: 51 %).<br>
+      · EQH/EQL como imán: el nivel más cercano se toca antes el 69 % de las veces, lo mismo que por pura distancia.<br>
+      · Rango de las 9 h de España (vela de 9 a 10 y rango de 0 a 9): ≈ 0 antes de comisiones.<br>
+      · Cortos: 40 de 41 variantes no ganan nada.</div>`;
 }
 async function loadVal() {
   valEl.innerHTML = '<div class="muted">Calculando con las liquidaciones reales…</div>';
@@ -1348,7 +1447,7 @@ function closeVal() {
 }
 bVal.onclick = () => {
   if (valEl.style.display === 'block') { closeVal(); return; }
-  cfgEl.style.display = 'none'; closeHelp();
+  cfgEl.style.display = 'none'; closeHelp(); closeSig();
   valEl.style.display = 'block';
   valEl.dataset.tf = tf;
   loadVal();
@@ -1485,6 +1584,8 @@ const HELP_ICON = {
   curves: svgI('<polyline points="29,8 22,6 14,3 4,1" fill="none" stroke="#ff5a5a" stroke-width="1.5"/>' +
     '<polyline points="29,8 24,10 16,13 6,15" fill="none" stroke="#3ddc84" stroke-width="1.5"/>'),
   bias: svgI('<rect x="1" y="5" width="28" height="6" rx="3" fill="#ff9f1c"/><rect x="1" y="5" width="11" height="6" rx="3" fill="#2ec4ff"/>'),
+  sig: svgI('<rect x="1" y="4" width="8" height="8" rx="2" fill="#26a69a"/><rect x="11" y="4" width="8" height="8" rx="2" fill="#FFD60A"/>' +
+    '<rect x="21" y="4" width="8" height="8" rx="2" fill="#ef5350"/>'),
   bubbles: svgI('<circle cx="9" cy="8" r="5.5" fill="rgba(255,159,28,0.55)" stroke="#ff9f1c"/><circle cx="22" cy="8" r="3.5" fill="rgba(46,196,255,0.55)" stroke="#2ec4ff"/>'),
   pulse: svgI('<circle cx="15" cy="8" r="6.5" fill="none" stroke="#ff9f1c" stroke-width="1.5"/><circle cx="15" cy="8" r="2.5" fill="none" stroke="#ff9f1c" opacity=".6"/>'),
   hl: dashI('#ff9f1c', '#2ec4ff'),
@@ -1525,6 +1626,11 @@ const HELP = [
     ['bias', 'Sesgo «±2% ▲ cortos ▼ largos»', 'Cómo se reparte la liquidez cerca del precio (' +
       Object.entries(BIAS_WIN).map(([k, v]) => `±${v} % en ${TF_LABEL[k]}`).join(', ') + `): ${S_('▲ cortos por encima')} y ${L_('▼ largos por debajo')}.`],
     ['◎', 'Imán', 'La zona más fuerte dentro de ese margen: su precio, a cuántos puntos está y cuánto dinero tiene. El precio a veces va a buscar esa liquidez, pero no siempre.']]],
+  ['#a3e635', 'Señal de tendencia', [
+    ['sig', 'COMPRA · ESPERA · VENTA', 'El chip de arriba a la izquierda. Resume la tendencia de fondo de BTC con 3 votos (diario y 4h): <span class="rt">COMPRA</span> = 3 de 3; <span class="warn">ESPERA</span> = 1 o 2; <span class="err">VENTA</span> = 0. No dibuja nada en el gráfico. Tócalo para ver el detalle.'],
+    ['✓', 'Los 3 votos', 'El cierre diario por encima de su media de 100 días (EMA100). El oscilador de Elliott (EWO 5/35) diario en impulso alcista. Y en 4h, la media de 50 velas por encima de la de 200 (EMA50 sobre EMA200).'],
+    ['!', 'Cómo se usa', 'Dice si el viento sopla a favor de los largos: con COMPRA, comprado; con ESPERA o VENTA, fuera. VENTA no es para abrir cortos: en el estudio, los cortos perdieron. No da entradas exactas en 5m o 15m.'],
+    ['%', 'Qué dio en el pasado', 'BTC 2018-2026 con comisiones: más ganancia que aguantar y mucha menos caída (la peor, −49 % frente a −81 %). Acierta 4 de cada 10 operaciones: las malas se cortan pronto y las buenas duran semanas. En años muy alcistas gana menos que aguantar. Lo pasado no asegura lo que venga.']]],
   ['#ff9f1c', 'Liquidaciones reales', [
     ['bubbles', 'Burbujas (capa «Liq»)', `Liquidaciones que pasaron de verdad en 8 exchanges (desde 5.000 $). ${L_('Naranja: largos liquidados')}; ${S_('cian: cortos liquidados')}. Cuanto más grande, más dinero.`],
     ['pulse', 'Pulso', 'Un círculo que se abre en el gráfico cuando llega una de 50.000 $ o más.'],
@@ -1566,7 +1672,7 @@ const HELP = [
   ['#3ddc84', '✓ Validez', [
     ['✓', 'Acierto', 'Del dinero liquidado de verdad, qué parte cayó en zonas que el mapa ya marcaba antes.'],
     ['?', 'Azar', 'Lo que se acertaría marcando precios al azar cerca. <span class="ok">✓</span> si el mapa acierta 1,5 veces o más que el azar; <span class="warn">≈</span> si algo más; <span class="err">✗</span> si no mejora.'],
-    ['…', 'Lo demás', 'Calibración, fuentes del OI, funding, ratio largos/cortos, estado de los 8 exchanges, Hyperliquid y la grabación del libro.']]],
+    ['…', 'Lo demás', 'Calibración, fuentes del OI, funding, ratio largos/cortos, estado de los 8 exchanges, Hyperliquid, la grabación del libro y qué estrategias se probaron para la señal de tendencia.']]],
   ['#e6e6e6', 'Palabras clave', [
     [null, 'Largo / corto', `${L_('Largo')} gana si sube; ${S_('corto')}, si baja.`],
     [null, 'Apalancamiento (x)', 'Multiplica la posición. Con 10x te liquida un movimiento en contra de algo menos del 10 %; con 100x, de menos del 1 %.'],
@@ -1578,6 +1684,8 @@ const HELP = [
     [null, 'Spot (contado)', 'Comprar o vender BTC directamente, sin contrato de futuros.'],
     [null, 'Muro', 'Mucho dinero en órdenes límite en un mismo precio.'],
     [null, 'Puntos (pts)', '1 punto = 1 $ en el precio de BTC. «−1.281 pts» = 1.281 $ por debajo.'],
+    [null, 'EMA', 'Media móvil exponencial: el precio medio de las últimas velas, con más peso para las recientes. EMA100 diaria = unos 100 días.'],
+    [null, 'EWO (Elliott)', 'Oscilador de las ondas de Elliott: media de 5 velas menos media de 35. Cuando supera con fuerza su banda, el impulso es fuerte (lo que Elliott llama «onda 3»).'],
     [null, 'K · M · B', 'Miles, millones y miles de millones de dólares.']]]
 ];
 let helpBuilt = false;
@@ -1601,13 +1709,13 @@ function helpAsiaText() {
 function closeHelp() { helpEl.style.display = 'none'; }
 bHelp.onclick = () => {
   if (helpEl.style.display === 'block') { closeHelp(); return; }
-  cfgEl.style.display = 'none'; closeVal();
+  cfgEl.style.display = 'none'; closeVal(); closeSig();
   if (!helpBuilt) buildHelp();
   const ha = document.getElementById('helpAsia');
   if (ha) ha.textContent = helpAsiaText();
   helpEl.style.display = 'block';
 };
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelp(); });
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeHelp(); closeSig(); } });
 
 window.addEventListener('resize', layout);
 if (window.ResizeObserver) new ResizeObserver(layout).observe(bar);   // la barra cambia de alto en el móvil

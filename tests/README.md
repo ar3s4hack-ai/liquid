@@ -7,5 +7,5 @@ python3 tests/test_backend.py . /tmp/salida     # servidor: modelo, fuentes, rut
 node tests/harness.js . /tmp/salida             # web: dibujo, paneles, directo, mapa de liquidez, manual… (usa lo que deja la anterior)
 ```
 
-- `serve_test.py`: la web con datos simulados en `http://127.0.0.1:PUERTO` para verla en un navegador.
+- `serve_test.py`: la web con datos simulados en `http://127.0.0.1:PUERTO` para verla en un navegador (`TREND=compra`, `espera` o `venta` para la señal de tendencia).
 - `profile_server.py`: tiempos del servidor con datos de tamaño real (por temporalidad y modelo, validación, calibración, libro).

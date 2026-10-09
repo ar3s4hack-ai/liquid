@@ -12,6 +12,7 @@ import book as BK
 import cz as CZ
 import hl as HL
 import liqdata as LQ
+import trend as TR
 
 app = Flask(__name__, static_folder="static")
 try:
@@ -122,6 +123,21 @@ def fetch_candles(tf, limit=None):
     ]
     _candle_cache[(tf, limit)] = (time.time(), out)
     return [dict(c) for c in out]
+
+
+def fetch_closed(tf, limit):
+    """Velas cerradas [(apertura_s, o, h, l, c)] de Binance Futuros (la que está en curso se descarta)."""
+    rows = get_json(f"{FAPI}/fapi/v1/klines", {"symbol": SYMBOL, "interval": tf, "limit": min(limit, 1500)})
+    now_ms = time.time() * 1000
+    return [(int(r[0] // 1000), float(r[1]), float(r[2]), float(r[3]), float(r[4])) for r in rows if int(r[6]) < now_ms]
+
+
+def safe_trend():
+    """Tendencia de fondo (diario + 4h): el indicador pequeño de compra / venta. No se dibuja en el gráfico."""
+    try:
+        return TR.get(fetch_closed)
+    except Exception as e:
+        return {"error": str(e)[:120]}
 
 
 def fetch_spot_deltas(tf, limit=None):
@@ -764,6 +780,7 @@ def build(tf, model, levs, bin_pct=None, groups=None):
         "hl": safe_hl(price, params["range_pct"], hl_since),
         "labels": source_labels(),
         "credits": ["coinalyze"] if CZ.KEY and CZ.STATE["data"] else [],
+        "trend": safe_trend(),
     }
 
 
@@ -1309,7 +1326,7 @@ def api_status():
         db = {"error": str(e)[:120]}
     return jsonify({"collectors": LQ.status(), "db": db, "mark": LQ.MARK, "data_dir": LQ.DATA_DIR,
                     "hyperliquid": safe_call(HL.status), "book": safe_call(BK.status),
-                    "coinalyze": safe_call(cz_status)})
+                    "coinalyze": safe_call(cz_status), "trend": safe_call(TR.status)})
 
 
 def safe_call(fn):
