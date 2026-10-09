@@ -127,6 +127,33 @@ Sharpe de la señal actual → con el filtro (dentro de muestra: hasta 2023; fue
 - En la literatura pasa lo mismo: el impulso (momentum) es lo que más predice en BTC; el on-chain es lo más débil;
   funding, stablecoins, Fear & Greed y ETF explican poco o van detrás del precio; M2 y dólar, con retrasos inestables.
 
+## Script de Pine del usuario («AA FVG ZL + EMA»)
+
+Cada módulo replicado en Python (`pine.py`) y probado igual (futuros desde 2020, con comisiones y funding):
+
+| Módulo | Resultado |
+|---|---|
+| TrendCraft ICT SwiftEdge (BOS/MSS + canal SMA20) | 15m −91 %, 30m −80 %, 1h +17 %, 4h +66 % (aguantar en 4h: +308 %). No sirve |
+| Cruce EMA 10/50 | 15m −90 %, 30m −8 %, 1h +100 %, 4h +91 %. En diario +396 % frente a +224 %, parecido a los votos actuales |
+| FVG grandes (hueco > 1,5 × la media de los 50 últimos) | Sin ventaja tras comisiones; en 4h, positivo hasta 2023 y ≈ 0 desde 2024 |
+| Rechazos de liquidez | Negativos |
+| Rango 09:00-10:00 (UTC+2 fijo) | ≈ 0 antes de comisiones; de −0,2 a −0,4 R después |
+| **Liquidez Zero Lag, tendencia en 4h** | Sola: Sharpe 1,22 hasta 2023 y 1,24 desde 2024 (aguantar 0,70 y 0,59); +772 % frente a +259 % |
+
+La liquidez Zero Lag en 4h (niveles en las mechas de velas con mucho volumen; dos cierres al otro lado giran la
+tendencia) es lo único del script que aguanta:
+
+- Spot desde 2018: +1.361 % frente a +496 % de aguantar, peor caída −50 % frente a −81 %; 2018 +47 %, 2022 −38 %.
+- Aguanta al cambiar sus ajustes (mecha ×1,5-2,5, media de 14-30 velas; con RSI del volumen > 55 empeora), sin velas
+  pequeñas (mitad de la mecha: 95 % de coincidencia) y contra el azar (la misma liquidez desplazada en el tiempo
+  da igual o más Sharpe menos del 1 % de las veces). En 4h y 8h va bien; en 2h y 6h, regular; en 12h, mal.
+- Sumada a la señal (comprado con 3/3 **o** liquidez alcista) sube el Sharpe en los cuatro casos (futuros 1,32 → 1,42 y
+  1,01 → 1,30; spot 1,15 → 1,33 y 1,15 → 1,42) y spot pasa de +1.963 % a +7.802 %, pero en 2022 pierde un 31-38 % en vez
+  del 1 % y cada compra acierta algo menos (BTC más alto a 7 días: 54,8 % frente a 57,1 % en spot).
+- Decisión: la señal no cambia (más fiable en cada compra y en mercados bajistas). La liquidez se enseña aparte en el
+  chip, como dato más rápido. El servidor usa el mismo código (`trend.py`, POC con las velas de 5m de cada mecha):
+  0 diferencias con `pine.py` y el estado con 1.500 velas de 4h coincide con el de todo el histórico.
+
 ## Repetirlo
 
 ```bash
@@ -141,4 +168,6 @@ python3 ensemble.py && python3 sens.py   # los 3 votos juntos, probabilidades y 
 python3 final_stats.py                # números publicados, con trend.py del servidor (y comprueba que coincide)
 cd .. && python3 research/get_extra.py && cd research   # datos extra (~25 MB)
 python3 extra.py && python3 volcheck.py && python3 variants.py   # 19 datos extra, volatilidad y variantes de la regla
+python3 pine.py && python3 zl_check.py && python3 zl_combo.py && python3 zl_or_check.py && python3 zl_prob.py   # script de Pine
+python3 zl_stats.py                   # liquidez con trend.py del servidor (y comprueba que coincide)
 ```

@@ -10,7 +10,7 @@ COST = 0.0006          # futuros, por lado (0,05 % comisión taker + 0,01 % desl
 COST_SPOT = 0.0010     # spot, por lado
 MAKER = 0.0002         # orden límite en futuros
 SPLIT = pd.Timestamp("2024-01-01", tz="UTC")
-BPY = {"5m": 105120, "15m": 35040, "1h": 8760, "4h": 2190, "1d": 365}
+BPY = {"5m": 105120, "15m": 35040, "30m": 17520, "1h": 8760, "4h": 2190, "1d": 365}
 AGG = {"o": "first", "h": "max", "l": "min", "c": "last", "v": "sum", "q": "sum", "n": "sum", "tbv": "sum"}
 
 

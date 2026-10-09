@@ -1050,7 +1050,7 @@ gb = app.get_json
 app.get_json = lambda url, params=None, headers=None: [
     [(nowt - 2 * 86400) * 1000, "1", "2", "0.5", "1.5", "0", (nowt - 86400) * 1000 - 1],
     [(nowt - 86400) * 1000, "1.5", "3", "1", "2", "0", (nowt + 600) * 1000]]
-assert app.fetch_closed("1d", 2) == [((nowt - 2 * 86400), 1.0, 2.0, 0.5, 1.5)]
+assert app.fetch_closed("1d", 2) == [((nowt - 2 * 86400), 1.0, 2.0, 0.5, 1.5, 0.0)]          # con el volumen
 app.get_json = gb
 # caché de 5 min y sin esperar si otro hilo ya está pidiendo
 TR._state.update(t=0.0, v=None, err=None)
@@ -1108,6 +1108,7 @@ app.get_json = fake_get
 assert "error" not in dt_, dt_.get("error")
 tr_ = dt_["trend"]
 assert tr_["label"] == "espera" and tr_["score"] == 2 and tr_["since"] == mix_4[jx][0] + 14400 and len(tr_["votes"]) == 3, tr_
+assert tr_["liq"]["trend"] == 0 and tr_["liq"]["exact"] is True and "flip" in tr_["liq"], tr_["liq"]      # velas sin mechas de liquidez
 assert stt["label"] == "espera" and stt["score"] == 2 and stt["error"] is None and stt["age_s"] is not None
 TR._state.update(t=0.0, v=None, err=None)
 app._cache.clear()
@@ -1118,6 +1119,76 @@ app.get_json = fake_get
 assert "error" not in de_ and de_["trend"] == {"error": "sin red"}, de_.get("trend")   # sin tendencia, el resto sigue
 app._cache.clear()
 json.dump(dict(tr_), open(os.path.join(OUT, "trend.json"), "w"))
+
+# liquidez Zero Lag de 4h (del script de Pine del usuario): niveles en mechas, POC con velas de 5m, giro con 2 cierres
+assert TR.rsi_wilder([5.0] * 20, 14)[-1] == 100.0 and abs(TR.rsi_wilder([1, 2, 1, 2, 1, 2, 1, 2] * 4, 14)[-1] - 50) < 5
+Z0 = 1700006400 // 14400 * 14400
+
+
+def zrow(i, o, h, l, c, v):
+    return (Z0 + i * 14400, float(o), float(h), float(l), float(c), float(v))
+
+
+zr = [zrow(i, 100, 100.6, 99.4, 100.1 if i % 2 else 99.9, 10) for i in range(40)]
+zr.append(zrow(40, 100, 104, 99.5, 100.2, 80))           # mecha de arriba enorme y volumen alto: nivel de tipo 1
+zr.append(zrow(41, 100.2, 100.7, 99.6, 100.3, 10))
+mk = TR.zl_marked(zr)
+assert [(i, ty) for i, ty, _, _ in mk] == [(40, 1)] and mk[0][2] == 104 and mk[0][3] == 100.2, mk
+assert TR.poc_from([(103.9, 5.0), (101.0, 1.0)], 104.0, 100.2) == 100.2 + 3.8 / 7 * 6.5      # tramo de arriba
+assert TR.poc_from([(90.0, 5.0)], 104.0, 100.2) == 100.2 + 3.8 / 7 * 0.5                    # sin volumen dentro: el primero
+lv = (104 + 100.2) / 2
+zr += [zrow(42, 100.3, lv + 2, 100.1, lv + 1, 10), zrow(43, lv + 1, lv + 2.5, lv + 0.2, lv + 1.5, 10)]
+z = TR.liquidity(zr, {})
+assert z["trend"] == 1 and z["since"] == zr[43][0] + 14400 and z["levels"] == 0, z            # dos cierres por encima
+assert TR.liquidity(zr[:43], {})["trend"] == 0                                               # con uno solo, no
+assert TR.liquidity(zr, {}, full=True)[-2:] == [0, 1]
+zr2 = [zrow(i, 100, 100.6, 99.4, 100.1 if i % 2 else 99.9, 10) for i in range(40)]
+zr2.append(zrow(40, 100, 100.5, 96, 99.8, 80))              # mecha de abajo enorme: nivel de tipo -1 (soporte)
+zr2 += [zrow(41 + k, 100, 100.6, 99.5, 100.2, 10) for k in range(3)]
+z2 = TR.liquidity(zr2, {})
+assert z2["trend"] == 0 and z2["flip"] == round((99.8 + 96) / 2, 1) and z2["levels"] == 1, z2   # lo que la pondría bajista
+z3 = TR.liquidity(zr2 + [zrow(44, 100, 100.2, 97.0, 97.5, 10), zrow(45, 97.5, 97.8, 97.0, 97.4, 10)], {})
+assert z3["trend"] == -1 and z3["since"] == Z0 + 45 * 14400 + 14400
+asked5 = []
+
+
+def f5(t):
+    asked5.append(t)
+    return [(103.9, 5.0), (101.0, 1.0)]
+
+
+TR._POC.clear()
+ls = TR.liq_state(zr, f5)
+assert asked5 == [zr[40][0]] and TR._POC[zr[40][0]] == 100.2 + 3.8 / 7 * 6.5 and ls["exact"] is True
+assert TR.liq_state(zr, f5) and asked5 == [zr[40][0]]                                         # guardado: no se repite
+TR._POC.clear()
+
+
+def f5_bad(t):
+    raise RuntimeError("sin red")
+
+
+lb = TR.liq_state(zr, f5_bad)
+assert lb["exact"] is False and lb["trend"] == 1 and not TR._POC                               # sin 5m: mitad de la mecha
+assert TR.liq_state([r[:5] for r in zr], f5) is None                                          # velas sin volumen: nada
+gb = app.get_json
+seen = []
+
+
+def g5(url, params=None, headers=None):
+    seen.append(params)
+    return [[params["startTime"] + k * 300000, "1", "2", "0.5", str(100 + k), str(k + 1), 0] for k in range(48)]
+
+
+app.get_json = g5
+r5 = app.fetch_5m_of_4h(zr[40][0])
+app.get_json = gb
+assert seen[0]["interval"] == "5m" and seen[0]["startTime"] == zr[40][0] * 1000 and seen[0]["endTime"] == (zr[40][0] + 14400) * 1000 - 1
+assert len(r5) == 48 and r5[0] == (100.0, 1.0)
+TR._state.update(t=0.0, v=None, err=None)
+vz = TR.get(lambda iv, lim: [r + (10.0,) for r in (up_d if iv == "1d" else up_4)], lambda t: [])
+assert vz["liq"]["trend"] == 0 and vz["liq"]["study"]["ret"] > 0 and TR.status()["liq"] == 0
+TR._state.update(t=0.0, v=None, err=None)
 ok(f"tendencia: COMPRA/ESPERA/VENTA con 3 votos, cambio de EMA100 en {r['flip']:,.0f}, desde cuándo, solo velas cerradas, "
-   "sin mirar al futuro, caché de 5 min y rutas")
+   "sin mirar al futuro, caché de 5 min y rutas; liquidez Zero Lag 4h (niveles, POC de 5m guardado, giro con 2 cierres)")
 print("TODO EL SERVIDOR OK")

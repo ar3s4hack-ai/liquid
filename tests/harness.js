@@ -607,7 +607,8 @@ function makeEnv(opts) {
     'Liquidaciones, Liquidez (libro) o Las dos', 'Pro: 4 colores', 'Completa: todos', '<b>Grupo</b>', '<b>Imán</b>', '<b>Intensidad</b>', '«Total ≥»', 'maxHeat',
     '<b>Burbujas (capa «Liq»)</b>', '<b>Pulso</b>', '<b>Aviso ⚡</b>', '<b>Velas</b>', '<b>Perfil</b>', '<b>Curvas</b>', '<b>Acierto</b>', '<b>Azar</b>', '<b>Puntos (pts)</b>',
     'no es una recomendación ni una señal de entrada',
-    '<b>COMPRA · ESPERA · VENTA</b>', '<b>Los 3 votos</b>', '<b>Cómo se usa</b>', 'no es para abrir cortos', '<b>EMA</b>', '<b>EWO (Elliott)</b>'];
+    '<b>COMPRA · ESPERA · VENTA</b>', '<b>Los 3 votos</b>', '<b>Cómo se usa</b>', 'no es para abrir cortos', '<b>EMA</b>', '<b>EWO (Elliott)</b>',
+    '<b>Liquidez 4h (de tu script)</b>'];
   const miss = must.filter(t => !hm.includes(t));
   if (miss.length) throw new Error('el manual no explica: ' + miss.join(' | '));
   // los colores de los dibujos son los del gráfico
@@ -650,6 +651,7 @@ function makeEnv(opts) {
       'Acierta 4 de cada 10', 'el <b>57 %</b> de las veces', 'un día cualquiera: 53 %', 'No es una recomendación de inversión'];
     const miss = must.filter(x => !sp.includes(x));
     if (miss.length || !/\+1\.?963 %/.test(sp)) throw new Error('detalle de la señal sin: ' + miss.join(' | ') + '\n' + sp);
+    if (!sp.includes('Liquidez Zero Lag 4h: aún sin ningún nivel roto.') || !sp.includes('no cuenta para la señal')) throw new Error('liquidez sin estado: ' + sp);
     env.get('sClose').onclick();
     if (env.get('sigp').style.display !== 'none') throw new Error('cerrar con ✕');
     env.get('sig').onclick(); env.get('sig').onclick();
@@ -661,7 +663,7 @@ function makeEnv(opts) {
     if (env.get('sigp').style.display !== 'none' || env.get('val').style.display !== 'block') throw new Error('✓ Validez cierra el detalle');
     const vh = env.get('val').innerHTML;
     for (const x of ['Señal de tendencia (chip de arriba a la izquierda)', 'Probado y descartado', 'barrido del rango asiático', 'EQH/EQL', 'Cortos: 40 de 41',
-      '19 datos extra como filtro', 'Ninguno mejora en 2024-2026'])
+      '19 datos extra como filtro', 'Ninguno mejora en 2024-2026', 'De tu script de Pine', 'La liquidez Zero Lag de 4h sí funciona sola'])
       if (!vh.includes(x)) throw new Error('✓ Validez no explica: ' + x);
     env.js('closeVal()');
     // COMPRA y VENTA
@@ -678,6 +680,20 @@ function makeEnv(opts) {
     for (const x of ['▼ VENTA · 0 de 3', 'Recupera el voto de la EMA100 si el día cierra sobre', 'Así desde hace más de 5 meses', 'impulso bajista',
       '<span class="bad">✗</span> Cierre diario bajo la EMA100'])
       if (!sp.includes(x)) throw new Error('detalle VENTA sin: ' + x);
+    const TL = JSON.parse(JSON.stringify(T3));
+    TL.liq = { trend: 1, since: 1791230400, flip: 78900.4, levels: 7, exact: true,
+      study: { from: '2018-01', ret: 13.61, hold: 4.96, dd: -0.5, hold_dd: -0.81, y2022: -0.38, or_ret: 78.02 } };
+    current = withT(TL); await env.js('load()'); await settle();
+    const lh = env.get('sigp').innerHTML;
+    for (const x of ['<span class="ok">✓</span> Liquidez Zero Lag 4h: alcista desde el ', '· se gira con 2 cierres de 4h bajo <b>78.900</b>',
+      'Sola desde 2018: +1361 % (aguantar +496 %), peor caída −50 %', 'en 2022 perdió un 38 % (la señal, −1 %)'])
+      if (!lh.includes(x)) throw new Error('liquidez alcista sin: ' + x + '\n' + lh);
+    TL.liq.trend = -1; current = withT(TL); await env.js('load()'); await settle();
+    if (!env.get('sigp').innerHTML.includes('<span class="bad">✗</span> Liquidez Zero Lag 4h: bajista') ||
+        !env.get('sigp').innerHTML.includes('se gira con 2 cierres de 4h sobre <b>78.900</b>')) throw new Error('liquidez bajista');
+    if (!/class="sig compra"/.test(sigH())) throw new Error('la liquidez no cambia la etiqueta');
+    TL.liq = { error: 'x' }; current = withT(TL); await env.js('load()'); await settle();
+    if (env.get('sigp').innerHTML.includes('Liquidez Zero Lag')) throw new Error('con error, sin liquidez');
     current = withT(T3); await env.js('load()'); await settle();          // abierto: se actualiza con los datos nuevos
     if (!env.get('sigp').innerHTML.includes('▲ COMPRA · 3 de 3')) throw new Error('el detalle abierto no se actualiza');
     env.js('closeSig()');

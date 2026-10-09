@@ -126,16 +126,24 @@ def fetch_candles(tf, limit=None):
 
 
 def fetch_closed(tf, limit):
-    """Velas cerradas [(apertura_s, o, h, l, c)] de Binance Futuros (la que está en curso se descarta)."""
+    """Velas cerradas [(apertura_s, o, h, l, c, volumen)] de Binance Futuros (la que está en curso se descarta)."""
     rows = get_json(f"{FAPI}/fapi/v1/klines", {"symbol": SYMBOL, "interval": tf, "limit": min(limit, 1500)})
     now_ms = time.time() * 1000
-    return [(int(r[0] // 1000), float(r[1]), float(r[2]), float(r[3]), float(r[4])) for r in rows if int(r[6]) < now_ms]
+    return [(int(r[0] // 1000), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5]))
+            for r in rows if int(r[6]) < now_ms]
+
+
+def fetch_5m_of_4h(t):
+    """Velas de 5m [(cierre, volumen)] de la vela de 4h que empieza en t: el POC de su mecha (liquidez Zero Lag)."""
+    rows = get_json(f"{FAPI}/fapi/v1/klines", {"symbol": SYMBOL, "interval": "5m", "startTime": t * 1000,
+                                               "endTime": (t + 14400) * 1000 - 1, "limit": 48})
+    return [(float(r[4]), float(r[5])) for r in rows]
 
 
 def safe_trend():
     """Tendencia de fondo (diario + 4h): el indicador pequeño de compra / venta. No se dibuja en el gráfico."""
     try:
-        return TR.get(fetch_closed)
+        return TR.get(fetch_closed, fetch_5m_of_4h)
     except Exception as e:
         return {"error": str(e)[:120]}
 

@@ -74,7 +74,10 @@ def trend_klines(iv, limit):
         t = cur - (limit - 1 - i) * step
         c = C[-1]["close"] * math.exp(g * (i - (limit - 1)) + 0.01 * math.sin(i / 7))
         o = prev if prev is not None else c
-        rows.append([t * 1000, str(o), str(max(o, c) * 1.003), str(min(o, c) * 0.997), str(c), "0", (t + step) * 1000 - 1])
+        hi, lo, vol = max(o, c) * 1.003, min(o, c) * 0.997, 1000.0
+        if iv == "4h" and i == limit - 200:      # una vela con mecha enorme y mucho volumen: nivel de liquidez Zero Lag
+            hi, lo, vol = (max(o, c) * 1.03, lo, 9000.0) if g > 0 else (hi, min(o, c) * 0.97, 9000.0)
+        rows.append([t * 1000, str(o), str(hi), str(lo), str(c), str(vol), (t + step) * 1000 - 1])
         prev = c
     return rows
 

@@ -980,7 +980,7 @@ function renderSig() {
     <div class="v">${ok(a.on)} Cierre diario ${a.on ? 'sobre' : 'bajo'} la EMA100 (${fmt(a.ema)})</div>
     <div class="v">${ok(b.on)} Elliott (EWO 5/35 diario): ${ewo}</div>
     <div class="v">${ok(c.on)} 4h: EMA50 ${c.on ? 'sobre' : 'bajo'} la EMA200 (${pc(c.fast / c.slow - 1, 1)})</div>
-    <div class="v">${since}<br>${flip}</div>
+    <div class="v">${since}<br>${flip}</div>${liqBlock(t, ok, day)}
     <h4>Qué significa</h4>
     <div><span class="compra">COMPRA</span> (3 de 3): estar comprado. <span class="espera">ESPERA</span> (1-2) y <span class="venta">VENTA</span> (0): fuera.
       VENTA es vender o no comprar, <b>no abrir cortos</b>: en corto con esta señal se perdió (${pc(fu.shorts)}).</div>
@@ -999,6 +999,18 @@ function renderSig() {
     <div class="muted" style="margin-top:6px">Es la tendencia de fondo: vale en cualquier temporalidad, pero no da entradas exactas en 5m o 15m.
       Estudio con datos hasta el ${S.updated.split('-').reverse().join('/')}. No es una recomendación de inversión.</div>`;
   document.getElementById('sClose').onclick = closeSig;
+}
+// liquidez Zero Lag de 4h (del script de Pine del usuario): informativa, no cambia COMPRA / ESPERA / VENTA
+function liqBlock(t, ok, day) {
+  const lq = t.liq;
+  if (!lq || lq.error) return '';
+  const L = lq.study || {}, up = lq.trend > 0;
+  const head = '<h4>Más rápida: liquidez 4h de tu script (no cuenta para la señal)</h4>';
+  if (!lq.trend) return head + '<div class="v">Liquidez Zero Lag 4h: aún sin ningún nivel roto.</div>';
+  return head + `<div class="v">${ok(up)} Liquidez Zero Lag 4h: ${up ? 'alcista' : 'bajista'}${lq.since ? ' desde el ' + day(lq.since) : ''}` +
+    (lq.flip ? ` · se gira con 2 cierres de 4h ${up ? 'bajo' : 'sobre'} <b>${fmt(lq.flip)}</b>` : '') + '</div>' +
+    (L.ret !== undefined ? `<div class="muted">Sola desde ${L.from.slice(0, 4)}: ${pc(L.ret)} (aguantar ${pc(L.hold)}), peor caída ${pc(L.dd)}. ` +
+      `Va antes que la señal, pero en 2022 perdió un ${pc(L.y2022).replace('−', '')} (la señal, ${pc(t.study.years['2022'][0])}).</div>` : '');
 }
 function closeSig() { sigP.style.display = 'none'; }
 function toggleSig() {
@@ -1431,7 +1443,9 @@ function sigBlock() {
       · Cortos: 40 de 41 variantes no ganan nada.<br>
       · 19 datos extra como filtro: Fear & Greed, MVRV, stablecoins, flujos y saldo de los exchanges, ETF, funding, OI,
       largos/cortos, prima de Coinbase, volatilidad, mineros, dólar, tipos reales, liquidez de la Fed, S&P 500 y atención.
-      Ninguno mejora en 2024-2026; varios funcionaban hasta 2023 y después empeoran la señal.</div>`;
+      Ninguno mejora en 2024-2026; varios funcionaban hasta 2023 y después empeoran la señal.<br>
+      · De tu script de Pine: TrendCraft ICT (BOS/MSS), cruce EMA 10/50 de 15m a 4h, FVG grandes, rechazos de liquidez y
+      rango de 9 a 10: sin ventaja. La liquidez Zero Lag de 4h sí funciona sola y se enseña aparte en el chip.</div>`;
 }
 async function loadVal() {
   valEl.innerHTML = '<div class="muted">Calculando con las liquidaciones reales…</div>';
@@ -1633,7 +1647,8 @@ const HELP = [
     ['sig', 'COMPRA · ESPERA · VENTA', 'El chip de arriba a la izquierda. Resume la tendencia de fondo de BTC con 3 votos (diario y 4h): <span class="rt">COMPRA</span> = 3 de 3; <span class="warn">ESPERA</span> = 1 o 2; <span class="err">VENTA</span> = 0. No dibuja nada en el gráfico. Tócalo para ver el detalle.'],
     ['✓', 'Los 3 votos', 'El cierre diario por encima de su media de 100 días (EMA100). El oscilador de Elliott (EWO 5/35) diario en impulso alcista. Y en 4h, la media de 50 velas por encima de la de 200 (EMA50 sobre EMA200).'],
     ['!', 'Cómo se usa', 'Dice si el viento sopla a favor de los largos: con COMPRA, comprado; con ESPERA o VENTA, fuera. VENTA no es para abrir cortos: en el estudio, los cortos perdieron. No da entradas exactas en 5m o 15m.'],
-    ['%', 'Qué dio en el pasado', 'BTC 2018-2026 con comisiones: más ganancia que aguantar y mucha menos caída (la peor, −49 % frente a −81 %). Acierta 4 de cada 10 operaciones: las malas se cortan pronto y las buenas duran semanas. En años muy alcistas gana menos que aguantar. Lo pasado no asegura lo que venga.']]],
+    ['%', 'Qué dio en el pasado', 'BTC 2018-2026 con comisiones: más ganancia que aguantar y mucha menos caída (la peor, −49 % frente a −81 %). Acierta 4 de cada 10 operaciones: las malas se cortan pronto y las buenas duran semanas. En años muy alcistas gana menos que aguantar. Lo pasado no asegura lo que venga.'],
+    ['ZL', 'Liquidez 4h (de tu script)', 'La «Zero Lag Liquidity» de tu script de TradingView: niveles en las mechas de velas de 4h con mucho volumen. Dos cierres de 4h por encima de uno de arriba la ponen alcista; dos por debajo de uno de abajo, bajista. Va antes que la señal y gana más en las subidas, pero en 2022 perdió un 38 %. Se ve al tocar el chip y no cambia COMPRA, ESPERA ni VENTA.']]],
   ['#ff9f1c', 'Liquidaciones reales', [
     ['bubbles', 'Burbujas (capa «Liq»)', `Liquidaciones que pasaron de verdad en 8 exchanges (desde 5.000 $). ${L_('Naranja: largos liquidados')}; ${S_('cian: cortos liquidados')}. Cuanto más grande, más dinero.`],
     ['pulse', 'Pulso', 'Un círculo que se abre en el gráfico cuando llega una de 50.000 $ o más.'],
