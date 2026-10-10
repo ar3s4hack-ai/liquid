@@ -663,7 +663,8 @@ function makeEnv(opts) {
     if (env.get('sigp').style.display !== 'none' || env.get('val').style.display !== 'block') throw new Error('✓ Validez cierra el detalle');
     const vh = env.get('val').innerHTML;
     for (const x of ['Señal de tendencia (chip de arriba a la izquierda)', 'Probado y descartado', 'barrido del rango asiático', 'EQH/EQL', 'Cortos: 40 de 41',
-      '19 datos extra como filtro', 'Ninguno mejora en 2024-2026', 'De tu script de Pine', 'La liquidez Zero Lag de 4h sí funciona sola'])
+      '19 datos extra como filtro', 'Ninguno mejora en 2024-2026', 'De tu script de Pine', 'La liquidez Zero Lag de 4h sí funciona sola',
+      'SMC/ICT y Wyckoff, segunda tanda', 'SMT con ETH', 'spring/upthrust', 'lo que sirve es la tendencia de fondo'])
       if (!vh.includes(x)) throw new Error('✓ Validez no explica: ' + x);
     env.js('closeVal()');
     // COMPRA y VENTA

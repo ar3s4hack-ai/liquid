@@ -32,9 +32,11 @@ señal es el chip de tendencia de fondo (COMPRA · ESPERA · VENTA), probado con
   EMA50 sobre EMA200 en 4h. **COMPRA** = 3 de 3; **ESPERA** = 1 o 2; **VENTA** = 0 (vender o no comprar; abrir cortos con
   ella perdió dinero). Al tocarlo: los votos, desde cuándo, a qué cierre diario cambia y el estudio. BTC 2018-2026 con
   comisiones: +1.963 % frente a +496 % de aguantar y peor caída −49 % frente a −81 %; acierta 4 de cada 10 operaciones
-  y en años muy alcistas gana menos que aguantar. SMC/ICT, rango asiático, ondas de Elliott, Bollinger, votos de
-  indicadores de 5m y EQH/EQL no superaron la prueba, ni 19 datos extra como filtro (on-chain, Fear & Greed,
-  funding, OI, ETF, stablecoins, prima de Coinbase, macro…). Todo en `research/` (scripts y resultados).
+  y en años muy alcistas gana menos que aguantar. SMC/ICT (barridas, CHoCH, FVG, order blocks, modelo 2022, Silver
+  Bullet, OTE, breaker, CISD, SMT con ETH, Judas/Power of 3), Wyckoff (spring, clímax, absorción, VSA), rango
+  asiático, ondas de Elliott, Bollinger, votos de indicadores de 5m y EQH/EQL no superaron la prueba, ni 19 datos
+  extra como filtro (on-chain, Fear & Greed, funding, OI, ETF, stablecoins, prima de Coinbase, macro…). Todo en
+  `research/` (scripts y resultados).
 - **Sesgo**: reparto de la liquidez cerca del precio (±2 % en 5m … ±20 % en 1D) y el «imán»: la zona más fuerte dentro de ese margen.
 - **En directo**: precio y vela de Binance por WebSocket; liquidaciones reales de los 8 exchanges cada 4 s,
   con pulso en el gráfico (≥ 50K $) y aviso ⚡ cuando suman ≥ 250K $ en 2,5 s.

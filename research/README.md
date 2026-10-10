@@ -154,6 +154,65 @@ tendencia) es lo único del script que aguanta:
   chip, como dato más rápido. El servidor usa el mismo código (`trend.py`, POC con las velas de 5m de cada mecha):
   0 diferencias con `pine.py` y el estado con 1.500 velas de 4h coincide con el de todo el histórico.
 
+## SMC, ICT y Wyckoff: segunda tanda (`smc2.py`, `smt.py`, `wyckoff.py`)
+
+Lo que faltaba después de `ict.py` y `pine.py`. Reglas fijadas antes de mirar (están al principio de cada script),
+hora de Nueva York con horario de verano, futuros 2020-2026 y el simulador de `sim.py`: entrada a mercado 0,06 % u
+orden límite 0,02 %, objetivo 0,02 %, stop 0,06 %; salidas recorriendo velas de 5m (si stop y objetivo caen en la
+misma, cuenta el stop) y cada operación contra la misma al revés («espejo»).
+
+R por operación con comisiones (hasta 2023 / 2024-2026); entre paréntesis, antes de comisiones:
+
+| Setup | Marco | Operaciones | Neto | Antes de comisiones |
+|---|---|---|---|---|
+| Modelo 2022: barrida en killzone → cambio de estructura con FVG → límite en el FVG | 5m | 220 / 178 | −0,20 / −0,27 | −0,05 / −0,09 |
+| … con el sesgo de los 3 votos de la web (4 variantes) | 5m | 83-107 / 66-85 | −0,14 a +0,09 / −0,01 a +0,11 | +0,02 a +0,30 |
+| Silver Bullet (barrida y FVG en 03-04, 10-11 y 14-15 h NY) | 5m | 983 / 707 | −0,15 / −0,31 | +0,10 / −0,01 |
+| Silver Bullet sin barrida (primer FVG de la ventana) | 5m | 2.782 / 1.921 | −0,38 / −0,38 | −0,03 / +0,02 |
+| OTE (70,5 % del tramo tras romper estructura) | 15m · 1h · 4h | 2.668 · 633 · 155 | −0,22 · −0,13 · −0,34 / −0,20 · −0,20 · −0,01 | ≈ 0 o negativo |
+| Breaker block | 15m · 1h | 1.975 · 431 | −0,35 · −0,23 / −0,28 · −0,22 | −0,10 · −0,12 / +0,02 · −0,07 |
+| FVG invertido (IFVG) | 5m · 15m | 24.650 · 5.919 | −0,20 · −0,05 / −0,26 · −0,12 | ≈ 0 |
+| Order blocks de swing de LuxAlgo (swing 70, tu ajuste) | 5m | 1.210 / 770 | −0,26 / −0,39 | +0,02 / −0,02 |
+| CISD tras barrida en killzone | 5m | 708 / 462 | −0,21 / −0,32 | +0,01 / −0,03 |
+| Divergencia SMT con ETH (el que barre cierra dentro) | 15m · 1h | 2.623 · 685 | −0,49 · −0,27 / −0,57 · −0,28 | −0,05 · −0,08 / −0,02 · −0,02 |
+| Judas swing / Power of 3 (apertura de medianoche de NY) | 5m | 1.094 / 838 | −0,41 / −0,34 | −0,08 / +0,03 |
+| Turtle soup (falso nuevo máximo/mínimo de 20 velas) | 1h · 4h | 1.196 · 292 | −0,28 · −0,13 / −0,25 · −0,08 | −0,07 · −0,02 / +0,04 · +0,07 |
+| Wyckoff: spring / upthrust en rangos | 15m · 1h · 4h | 349 · 95 · 18 | −0,21 · −0,61 · −0,25 / −0,62 · −0,50 · −0,01 | +0,21 · −0,45 · −0,15 / +0,03 · −0,25 · +0,08 |
+| Wyckoff: clímax de venta / compra | 1h · 4h | 454 · 71 | −0,16 · −0,36 / −0,10 · −0,24 | −0,08 · −0,32 / +0,00 · −0,19 |
+| Wyckoff: absorción (mucho volumen por punto de rango) | 1h · 4h | 314 · 27 | −0,41 · −0,02 / −0,42 · −0,18 | −0,23 · +0,05 / −0,18 · −0,06 |
+| VSA: sin demanda / sin oferta | 1h · 4h | 4.008 · 1.004 | −0,39 · −0,21 / −0,49 · −0,30 | ≈ 0 |
+| Divergencia de volumen en los giros (esfuerzo vs resultado) | 1h · 4h | 552 · 147 | +0,01 · +0,03 / −0,13 · +0,08 | +0,11 · +0,08 / +0,03 · +0,14 |
+
+Sin operaciones:
+
+- **Máximo/mínimo débil y fuerte de LuxAlgo**: con tu ajuste (5m, swing 70) el «débil» se toca antes el 60,5 % y el 63,5 %
+  de las veces; por pura distancia tocaría 61,4 % y 63,1 %: igual que el azar. En 1h sale 2-3 puntos por encima, pero
+  solo con tendencia alcista (la subida de fondo de BTC); con tendencia bajista, el mínimo «débil» se tocó menos de lo
+  esperado hasta 2023.
+- **Descuento/premium**: con estructura alcista, comprar solo en descuento (bajo la mitad del rango) da −74 % en
+  futuros 4h frente a +55 % comprando siempre con estructura alcista y +259 % aguantando (spot 4h: −73 %, +361 %, +496 %).
+
+Lo que sale:
+
+- **Antes de comisiones casi todo da ≈ 0 R y lo mismo que su espejo**: la dirección que marca el setup no aporta. Con
+  comisiones todo pierde, porque en 5m y 15m los stops son pequeños (0,2-0,7 % del precio) y la comisión se come de
+  0,15 a 0,4 R por operación.
+- **Lo único que mueve algo es el sesgo de la tendencia de fondo**: el modelo 2022 pasa de −0,2 R a ≈ 0 con los 3 votos
+  de la web (lo mismo, menos, en Silver Bullet, CISD y Judas). La información está en la tendencia, que ya es la señal.
+- **Spring/upthrust con poco volumen en 15m** dio +0,45 / +0,51 R, con solo 78 operaciones en 6 años. Es la mejor de
+  21 variantes de spring y sus vecinas no aguantan (`wyckoff_check.py`): con un rango de 30 velas pierden todas (−0,7 a
+  −1,5 R); con 60 velas o con otro umbral de volumen (0,8 o 1,2 veces la media) pierden en 2024-2026 o se quedan en
+  ≈ 0; en 30m y 1h, pierden. Contra el azar (el volumen de otra vela) el ajuste elegido gana a los 200 sorteos, pero
+  eso no corrige haberlo elegido entre 21: no es fiable.
+- Absorción: con la definición de los libros (volumen ≥ 2 veces la media y rango ≤ 0,6 ATR) no hay ni una vela en BTC:
+  el volumen alto siempre trae rango amplio. Se probó la versión relativa.
+- Fuera también: StatOasis (ICT en índices de EE. UU., diario, sin comisiones) no encuentra ningún concepto
+  significativo; de 25.000 variantes del Silver Bullet en futuros del Nasdaq y el S&P sobrevive el 1,7 % y solo la
+  barrida de liquidez suma; un bot con reglas ICT en EURUSD 15m dio un factor de beneficio de 0,81. El estudio de Osler
+  (Fed de Nueva York) muestra que los stops se acumulan justo detrás de los niveles redondos y que al romperlos el
+  precio acelera: la «liquidez» existe, pero lo que da es continuación, no giro. No hay estudios académicos que
+  validen ICT/SMC ni Wyckoff.
+
 ## Repetirlo
 
 ```bash
@@ -168,6 +227,7 @@ python3 ensemble.py && python3 sens.py   # los 3 votos juntos, probabilidades y 
 python3 final_stats.py                # números publicados, con trend.py del servidor (y comprueba que coincide)
 cd .. && python3 research/get_extra.py && cd research   # datos extra (~25 MB)
 python3 extra.py && python3 volcheck.py && python3 variants.py   # 19 datos extra, volatilidad y variantes de la regla
+python3 smc2.py && python3 smt.py && python3 wyckoff.py && python3 wyckoff_check.py   # SMC/ICT y Wyckoff, segunda tanda
 python3 pine.py && python3 zl_check.py && python3 zl_combo.py && python3 zl_or_check.py && python3 zl_prob.py   # script de Pine
 python3 zl_stats.py                   # liquidez con trend.py del servidor (y comprueba que coincide)
 ```

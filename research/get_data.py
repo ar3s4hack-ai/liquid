@@ -2,8 +2,9 @@
 
   futuros BTCUSDT: velas de 5m, 15m y 1D desde 2020 y el funding cobrado cada 8 h
   spot BTCUSDT: velas de 1h y 1D desde agosto de 2017
+  futuros ETHUSDT: velas de 5m desde 2020 (solo para la divergencia SMT, smt.py)
 
-Uso: python3 research/get_data.py   (unos 35 MB; hace falta poder entrar en data.binance.vision)"""
+Uso: python3 research/get_data.py   (unos 60 MB; hace falta poder entrar en data.binance.vision)"""
 import datetime as dt
 import gzip
 import io
@@ -61,9 +62,9 @@ def fetch_all(urls):
         return list(ex.map(get, urls))
 
 
-def klines(market, itv, y0, m0, name):
-    p = f"{market}/monthly/klines/BTCUSDT/{itv}/BTCUSDT-{itv}-"
-    d = f"{market}/daily/klines/BTCUSDT/{itv}/BTCUSDT-{itv}-"
+def klines(market, itv, y0, m0, name, sym="BTCUSDT"):
+    p = f"{market}/monthly/klines/{sym}/{itv}/{sym}-{itv}-"
+    d = f"{market}/daily/klines/{sym}/{itv}/{sym}-{itv}-"
     urls = [BASE + p + ym + ".zip" for ym in months(y0, m0)] + [BASE + d + x + ".zip" for x in days()]
     seen = {}
     for u, b in zip(urls, fetch_all(urls)):
@@ -106,4 +107,5 @@ if __name__ == "__main__":
     klines("futures/um", "1d", 2019, 9, "fut_1d")
     klines("spot", "1h", 2017, 8, "spot_1h")
     klines("spot", "1d", 2017, 8, "spot_1d")
+    klines("futures/um", "5m", 2020, 1, "eth_fut_5m", sym="ETHUSDT")
     funding()
